@@ -14,32 +14,38 @@ export class FirebaseConfig {
 
   private initializeFirebase() {
     if (!admin.apps.length) {
-      const serviceAccountPath = join(
-        process.cwd(),
-        'firebase-service-account.json',
-      );
-
       let credential: admin.credential.Credential;
 
-      // Try to use service account file first
-      if (existsSync(serviceAccountPath)) {
-        credential = admin.credential.cert(serviceAccountPath);
-      } else {
-        // Fallback to environment variables
-        const projectId = this.configService.get('firebase.projectId');
-        const privateKey = this.configService.get('firebase.privateKey');
-        const clientEmail = this.configService.get('firebase.clientEmail');
+      // Prioritize environment variables (for production/Vercel deployment)
+      const projectId = this.configService.get('firebase.projectId');
+      const privateKey = this.configService.get('firebase.privateKey');
+      const clientEmail = this.configService.get('firebase.clientEmail');
 
-        if (projectId && privateKey && clientEmail) {
-          credential = admin.credential.cert({
-            projectId,
-            privateKey: privateKey.replace(/\\n/g, '\n'),
-            clientEmail,
-          });
+      if (projectId && privateKey && clientEmail) {
+        // Use environment variables
+        credential = admin.credential.cert({
+          projectId,
+          privateKey: privateKey.replace(/\\n/g, '\n'),
+          clientEmail,
+        });
+        console.log('✅ Firebase Admin initialized with environment variables');
+      } else {
+        // Fallback to service account file (local development only)
+        const serviceAccountPath = join(
+          process.cwd(),
+          'firebase-service-account.json',
+        );
+
+        if (existsSync(serviceAccountPath)) {
+          credential = admin.credential.cert(serviceAccountPath);
+          console.log('✅ Firebase Admin initialized with service account file');
         } else {
           throw new Error(
-            'Firebase credentials not found. Please provide either ' +
-              'firebase-service-account.json or set environment variables.',
+            'Firebase credentials not found. Please provide environment variables:\n' +
+              '  - FIREBASE_PROJECT_ID\n' +
+              '  - FIREBASE_PRIVATE_KEY\n' +
+              '  - FIREBASE_CLIENT_EMAIL\n' +
+              'Or create firebase-service-account.json in the project root.',
           );
         }
       }
