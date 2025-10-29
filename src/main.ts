@@ -8,9 +8,11 @@ async function bootstrap() {
   // Enable CORS
   app.enableCors({
     origin: [
-      'http://localhost:5173', // Admin panel
-      'http://localhost:5174', // User panel
+      'http://localhost:5173', // Admin panel (local)
+      'http://localhost:5174', // User panel (local)
       'http://localhost:5175', // Additional port if needed
+       // Admin panel (production)
+      'https://respike-backend.vercel.app', // Backend (production)
     ],
     credentials: true,
   });
