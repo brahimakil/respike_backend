@@ -11,6 +11,7 @@ async function bootstrap() {
       'http://localhost:5173', // Admin panel (local)
       'http://localhost:5174', // User panel (local)
       'http://localhost:5175', // Additional port if needed
+      'https://respike-admin.vercel.app', // Admin panel (production)
       'https://respike-user.vercel.app', // User panel (production)
       'https://respike-backend.vercel.app', // Backend (production)
     ],
