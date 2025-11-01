@@ -13,6 +13,7 @@ async function bootstrap() {
       'http://localhost:5175', // Additional port if needed
       'https://respike-admin.vercel.app', // Admin panel (production)
       'https://respike-user.vercel.app', // User panel (production)
+      'http://localhost:3000',//backend
       'https://respike-backend.vercel.app', // Backend (production)
     ],
     credentials: true,

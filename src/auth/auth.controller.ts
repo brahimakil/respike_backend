@@ -22,6 +22,18 @@ export class AuthController {
     return this.authService.register(registerDto);
   }
 
+  @Post('admin/login')
+  @HttpCode(HttpStatus.OK)
+  async adminLogin(@Body() loginDto: LoginDto) {
+    return this.authService.adminLogin(loginDto);
+  }
+
+  @Post('user/login')
+  @HttpCode(HttpStatus.OK)
+  async userLogin(@Body() loginDto: LoginDto) {
+    return this.authService.userLogin(loginDto);
+  }
+
   @Post('validate')
   @HttpCode(HttpStatus.OK)
   async validateToken(@Headers('authorization') authHeader: string) {
