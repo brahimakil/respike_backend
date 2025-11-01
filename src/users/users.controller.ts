@@ -73,5 +73,15 @@ export class UsersController {
   ) {
     return this.usersService.updateUserCommission(id, body.coachCommissionOverride);
   }
+
+  @Get(':id/active-subscriptions')
+  async getUserActiveSubscriptions(@Param('id') id: string) {
+    return this.usersService.getUserActiveSubscriptions(id);
+  }
+
+  @Post(':id/delete')
+  async deleteUser(@Param('id') id: string) {
+    return this.usersService.deleteUser(id);
+  }
 }
 

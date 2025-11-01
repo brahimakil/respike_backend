@@ -510,5 +510,83 @@ export class UsersService {
       throw error;
     }
   }
+
+  /**
+   * Get active subscriptions for a user
+   */
+  async getUserActiveSubscriptions(userId: string): Promise<any[]> {
+    try {
+      console.log(`🔵 [USERS] Fetching active subscriptions for user: ${userId}`);
+
+      const snapshot = await this.firestore
+        .collection('subscriptions')
+        .where('userId', '==', userId)
+        .get();
+
+      const subscriptions = snapshot.docs
+        .filter(doc => {
+          const status = doc.data().status;
+          return status === 'active' || status === 'ACTIVE';
+        })
+        .map((doc) => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            startDate: data?.startDate?.toDate(),
+            endDate: data?.endDate?.toDate(),
+            createdAt: data?.createdAt?.toDate(),
+            updatedAt: data?.updatedAt?.toDate(),
+          };
+        });
+
+      console.log(`✅ [USERS] Found ${subscriptions.length} active subscriptions`);
+      return subscriptions;
+    } catch (error) {
+      console.error('❌ [USERS] Error fetching active subscriptions:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete user permanently (from Firestore and Firebase Auth)
+   */
+  async deleteUser(userId: string): Promise<{ message: string }> {
+    try {
+      console.log(`🔵 [USERS] Deleting user: ${userId}`);
+
+      // Check if user exists
+      const userDoc = await this.firestore.collection('users').doc(userId).get();
+      if (!userDoc.exists) {
+        throw new NotFoundException('User not found');
+      }
+
+      // Delete all user's subscriptions
+      const subscriptionsSnapshot = await this.firestore
+        .collection('subscriptions')
+        .where('userId', '==', userId)
+        .get();
+
+      const batch = this.firestore.batch();
+      subscriptionsSnapshot.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
+      console.log(`✅ [USERS] Deleted ${subscriptionsSnapshot.size} subscriptions`);
+
+      // Delete user from Firestore
+      await this.firestore.collection('users').doc(userId).delete();
+      console.log(`✅ [USERS] Deleted user from Firestore`);
+
+      // Delete user from Firebase Auth
+      await this.auth.deleteUser(userId);
+      console.log(`✅ [USERS] Deleted user from Firebase Auth`);
+
+      return { message: 'User deleted successfully' };
+    } catch (error) {
+      console.error('❌ [USERS] Error deleting user:', error);
+      throw error;
+    }
+  }
 }
 
