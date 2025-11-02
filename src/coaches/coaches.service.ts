@@ -356,6 +356,31 @@ export class CoachesService {
   }
 
   /**
+   * Get active users assigned to a coach
+   */
+  async getCoachActiveUsers(coachId: string): Promise<any[]> {
+    try {
+      console.log('🔵 [COACHES] Getting active users for coach:', coachId);
+
+      const usersSnapshot = await this.firestore
+        .collection('users')
+        .where('assignedCoachId', '==', coachId)
+        .get();
+
+      const users = usersSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+
+      console.log('✅ [COACHES] Found', users.length, 'users for coach');
+      return users;
+    } catch (error) {
+      console.error('❌ [COACHES] Error getting active users:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Delete coach
    */
   async deleteCoach(id: string): Promise<void> {
@@ -364,18 +389,71 @@ export class CoachesService {
 
       const coach = await this.getCoachById(id);
 
-      // Delete files from storage
-      await Promise.all([
-        this.storageService.deleteFile(
-          this.extractPathFromUrl(coach.profilePhotoUrl),
-        ),
-        this.storageService.deleteFile(
-          this.extractPathFromUrl(coach.idFrontPhotoUrl),
-        ),
-        this.storageService.deleteFile(
-          this.extractPathFromUrl(coach.idBackPhotoUrl),
-        ),
-      ]);
+      // Delete files from storage (continue even if file deletion fails)
+      try {
+        const deletePromises: Promise<void>[] = [];
+        
+        if (coach.profilePhotoUrl) {
+          const profilePath = this.extractPathFromUrl(coach.profilePhotoUrl);
+          if (profilePath) {
+            deletePromises.push(
+              this.storageService.deleteFile(profilePath).catch(err => {
+                console.warn('⚠️ [COACHES] Failed to delete profile photo:', err.message);
+              })
+            );
+          }
+        }
+
+        if (coach.idFrontPhotoUrl) {
+          const idFrontPath = this.extractPathFromUrl(coach.idFrontPhotoUrl);
+          if (idFrontPath) {
+            deletePromises.push(
+              this.storageService.deleteFile(idFrontPath).catch(err => {
+                console.warn('⚠️ [COACHES] Failed to delete ID front photo:', err.message);
+              })
+            );
+          }
+        }
+
+        if (coach.idBackPhotoUrl) {
+          const idBackPath = this.extractPathFromUrl(coach.idBackPhotoUrl);
+          if (idBackPath) {
+            deletePromises.push(
+              this.storageService.deleteFile(idBackPath).catch(err => {
+                console.warn('⚠️ [COACHES] Failed to delete ID back photo:', err.message);
+              })
+            );
+          }
+        }
+
+        await Promise.all(deletePromises);
+      } catch (storageError) {
+        console.warn('⚠️ [COACHES] Storage cleanup had issues:', storageError);
+        // Continue with deletion even if storage fails
+      }
+
+      // Remove coach assignment from all users
+      try {
+        const usersSnapshot = await this.firestore
+          .collection('users')
+          .where('assignedCoachId', '==', id)
+          .get();
+
+        if (!usersSnapshot.empty) {
+          const batch = this.firestore.batch();
+          usersSnapshot.docs.forEach(doc => {
+            batch.update(doc.ref, {
+              assignedCoachId: admin.firestore.FieldValue.delete(),
+              assignedCoachName: admin.firestore.FieldValue.delete(),
+            });
+          });
+          await batch.commit();
+          console.log(`✅ [COACHES] Removed coach assignment from ${usersSnapshot.size} users`);
+        }
+      } catch (userUpdateError) {
+        console.warn('⚠️ [COACHES] Failed to update users:', userUpdateError);
+        // Continue with deletion
+      }
 
       // Delete coach document
       await this.firestore.collection('coaches').doc(id).delete();
@@ -389,10 +467,39 @@ export class CoachesService {
 
   /**
    * Extract storage path from Firebase Storage URL
+   * Example URL: https://firebasestorage.googleapis.com/v0/b/bucket-name.appspot.com/o/path%2Fto%2Ffile.jpg?alt=media&token=xxx
+   * Extract: path/to/file.jpg
    */
   private extractPathFromUrl(url: string): string {
-    const match = url.match(/\/([^/]+\/[^/]+\/[^?]+)/);
-    return match ? match[1] : '';
+    try {
+      if (!url) return '';
+      
+      // Try to extract from Firebase Storage URL format
+      // Format: https://firebasestorage.googleapis.com/v0/b/bucket/o/encoded-path?params
+      const match = url.match(/\/o\/([^?]+)/);
+      if (match && match[1]) {
+        // Decode the URL-encoded path
+        const decodedPath = decodeURIComponent(match[1]);
+        
+        // Remove any leading bucket name or domain if present
+        // Expected format: coaches/profile-photos/filename.jpg
+        // But we might get: storage.googleapis.com/bucket/coaches/profile-photos/filename.jpg
+        const cleanPath = decodedPath.replace(/^.*?(coaches\/)/, '$1');
+        return cleanPath;
+      }
+      
+      // Alternative format: direct path extraction from end of URL
+      const pathMatch = url.match(/(coaches\/[^?]+)/);
+      if (pathMatch && pathMatch[1]) {
+        return pathMatch[1];
+      }
+      
+      console.warn('⚠️ [COACHES] Could not extract path from URL:', url);
+      return '';
+    } catch (error) {
+      console.error('❌ [COACHES] Error extracting path from URL:', error);
+      return '';
+    }
   }
 }
 

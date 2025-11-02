@@ -67,6 +67,11 @@ export class CoachesController {
     return this.coachesService.getAllCoaches();
   }
 
+  @Get(':id/active-users')
+  async getCoachActiveUsers(@Param('id') id: string) {
+    return this.coachesService.getCoachActiveUsers(id);
+  }
+
   @Get(':id')
   async getCoachById(@Param('id') id: string) {
     return this.coachesService.getCoachById(id);

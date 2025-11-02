@@ -68,7 +68,12 @@ export class StorageService {
       console.log(`🔵 [STORAGE] Deleting file: ${path}`);
       await this.bucket.file(path).delete();
       console.log(`✅ [STORAGE] File deleted successfully`);
-    } catch (error) {
+    } catch (error: any) {
+      // If file doesn't exist (404), log warning but don't throw
+      if (error.code === 404) {
+        console.warn(`⚠️ [STORAGE] File not found (already deleted?): ${path}`);
+        return;
+      }
       console.error('❌ [STORAGE] Delete error:', error);
       throw new Error(`Failed to delete file: ${error.message}`);
     }
