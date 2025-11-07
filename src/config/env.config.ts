@@ -31,5 +31,12 @@ export default () => ({
     secret: process.env.JWT_SECRET || 'default-secret-change-in-production',
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
+  
+  bunny: {
+    libraryId: process.env.BUNNY_LIBRARY_ID,
+    apiKey: process.env.BUNNY_API_KEY,
+    cdnHostname: process.env.BUNNY_CDN_HOSTNAME,
+    pullZone: process.env.BUNNY_PULL_ZONE,
+  },
 });
 

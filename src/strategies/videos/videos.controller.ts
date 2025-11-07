@@ -20,6 +20,7 @@ import { UpdateVideoDto } from './dto/update-video.dto';
 import { AuthGuard } from '../../auth/guards/auth.guard';
 import { Public } from '../../auth/decorators/public.decorator';
 import { StorageService } from '../../storage/storage.service';
+import { BunnyService } from '../../services/bunny.service';
 
 @Controller('strategies/:strategyId/videos')
 @UseGuards(AuthGuard)
@@ -27,14 +28,14 @@ export class VideosController {
   constructor(
     private readonly videosService: VideosService,
     private readonly storageService: StorageService,
+    private readonly bunnyService: BunnyService,
   ) {}
 
-  @Public()
   @Get()
-  async getAllVideos(@Param('strategyId') strategyId: string, @Req() req: any) {
-    const userId = req.user?.uid;
-    console.log('🔑 [VIDEOS CONTROLLER] User from request:', userId);
-    return this.videosService.getAllVideosForUser(strategyId, userId);
+  async getAllVideos(@Param('strategyId') strategyId: string) {
+    // Admin endpoint - requires AuthGuard - returns ALL videos with videoUrl as-is
+    console.log('� [VIDEOS CONTROLLER] Admin fetching all videos for strategy:', strategyId);
+    return this.videosService.getAllVideos(strategyId);
   }
 
   @Public()
@@ -101,25 +102,22 @@ export class VideosController {
       throw new BadRequestException('No video file provided');
     }
 
-    console.log('🔵 [VIDEOS] Uploading video for strategy:', strategyId);
+    console.log('🔵 [VIDEOS] Uploading video to Bunny.net for strategy:', strategyId);
     console.log('File details:', {
       fieldname: file.fieldname,
       originalname: file.originalname,
       mimetype: file.mimetype,
-      size: file.size,
+      size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
     });
 
-    const fileName = `video_${Date.now()}_${file.originalname}`;
-    const storagePath = `strategies/${strategyId}/videos/${fileName}`;
+    // Upload to Bunny.net Stream
+    const result = await this.bunnyService.uploadVideo(file.buffer, file.originalname);
 
-    const result = await this.storageService.uploadFile(
-      file.buffer,
-      storagePath,
-      file.mimetype,
-    );
-
-    console.log('✅ [VIDEOS] Video uploaded:', result.url);
-    return { url: result.url };
+    console.log('✅ [VIDEOS] Video uploaded to Bunny.net:', result.playbackUrl);
+    return { 
+      url: result.playbackUrl,
+      videoId: result.videoId,
+    };
   }
 
   @Post('upload-cover')

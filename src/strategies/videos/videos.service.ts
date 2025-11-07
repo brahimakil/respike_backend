@@ -283,6 +283,47 @@ export class VideosService {
   }
 
   /**
+   * Convert Firebase Storage URL to Cloudflare Worker URL
+   */
+  private convertToCloudflareUrl(firebaseUrl: string): string {
+    if (!firebaseUrl) return firebaseUrl;
+    
+    try {
+      // Check if it's already a Cloudflare URL
+      if (firebaseUrl.includes('workers.dev')) {
+        return firebaseUrl;
+      }
+      
+      // Extract the storage path from Firebase URL
+      // Example: https://firebasestorage.googleapis.com/v0/b/respike-670a4.firebasestorage.app/o/strategies%2F...
+      const match = firebaseUrl.match(/\/o\/([^?]+)/);
+      if (match && match[1]) {
+        const encodedPath = match[1];
+        const decodedPath = decodeURIComponent(encodedPath);
+        
+        console.log('🔄 Converting Firebase URL to Cloudflare:', decodedPath);
+        
+        // Return Cloudflare Worker URL
+        return `https://firebase-video-proxy.brhimakil-1.workers.dev/${decodedPath}`;
+      }
+      
+      // If it's a public URL format, extract differently
+      const publicMatch = firebaseUrl.match(/storage\.googleapis\.com\/([^\/]+)\/(.+)/);
+      if (publicMatch && publicMatch[2]) {
+        const path = publicMatch[2];
+        console.log('🔄 Converting public Firebase URL to Cloudflare:', path);
+        return `https://firebase-video-proxy.brhimakil-1.workers.dev/${path}`;
+      }
+      
+      console.warn('⚠️ Could not convert URL, returning original:', firebaseUrl);
+      return firebaseUrl;
+    } catch (error) {
+      console.error('❌ Error converting URL:', error);
+      return firebaseUrl;
+    }
+  }
+
+  /**
    * Get all videos for a user (filters based on subscription)
    */
   async getAllVideosForUser(strategyId: string, userId?: string): Promise<any[]> {
@@ -297,9 +338,9 @@ export class VideosService {
         const adminDoc = await this.firebaseConfig.getFirestore().collection('admins').doc(userId).get();
         console.log('👑 [VIDEOS] Admin check result:', adminDoc.exists);
         if (adminDoc.exists) {
-          console.log('✅ [VIDEOS] Admin access granted - returning all videos with URLs');
-          console.log('📹 [VIDEOS] Sample video data:', videos[0]);
-          return videos; // Admin gets full access
+          console.log('✅ [VIDEOS] Admin access granted - returning all videos');
+          // Return videos as-is (Bunny.net URLs are already in database)
+          return videos;
         }
       } else {
         console.log('⚠️ [VIDEOS] No userId provided - treating as anonymous');
@@ -347,13 +388,16 @@ export class VideosService {
       }
       
       const hasSubscription = userId ? await this.hasActiveSubscription(userId, strategyId) : false;
+      console.log('🔍 [VIDEOS] Subscription check result:', { userId, strategyId, hasSubscription });
 
-      // If user has active subscription, return full video data
+      // If user has active subscription, return full video data with videoUrl
       if (hasSubscription) {
+        console.log('✅ [VIDEOS] User has subscription - returning video with URL');
         return video;
       }
 
       // Otherwise, return limited info
+      console.log('❌ [VIDEOS] No subscription - hiding videoUrl');
       return {
         id: video.id,
         title: video.title,

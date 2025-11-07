@@ -5,6 +5,7 @@ export interface StrategyVideo {
   title: string;
   description: string;
   videoUrl: string;
+  bunnyVideoId?: string; // Bunny.net video ID for HLS streaming
   coverPhotoUrl?: string;
   isVisible: boolean;
   createdAt: Date;
@@ -15,6 +16,7 @@ export interface CreateVideoDto {
   title: string;
   description: string;
   videoUrl: string;
+  bunnyVideoId?: string; // Bunny.net video ID
   coverPhotoUrl?: string;
 }
 
@@ -23,6 +25,7 @@ export interface UpdateVideoDto {
   title?: string;
   description?: string;
   videoUrl?: string;
+  bunnyVideoId?: string; // Bunny.net video ID
   coverPhotoUrl?: string;
   isVisible?: boolean;
 }
