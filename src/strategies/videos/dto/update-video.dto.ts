@@ -20,6 +20,10 @@ export class UpdateVideoDto {
 
   @IsString()
   @IsOptional()
+  bunnyVideoId?: string;
+
+  @IsString()
+  @IsOptional()
   coverPhotoUrl?: string;
 
   @IsBoolean()

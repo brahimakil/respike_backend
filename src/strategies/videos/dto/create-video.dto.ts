@@ -15,6 +15,10 @@ export class CreateVideoDto {
 
   @IsString()
   @IsOptional()
+  bunnyVideoId?: string;
+
+  @IsString()
+  @IsOptional()
   coverPhotoUrl?: string;
 }
 

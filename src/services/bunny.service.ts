@@ -42,6 +42,7 @@ export class BunnyService {
       this.logger.log(`✅ Video object created with ID: ${videoId}`);
 
       // Step 2: Upload video file
+      this.logger.log(`📤 Uploading video file (${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB)...`);
       await axios.put(
         `${this.apiBaseUrl}/library/${this.libraryId}/videos/${videoId}`,
         videoBuffer,
@@ -52,6 +53,7 @@ export class BunnyService {
           },
           maxContentLength: Infinity,
           maxBodyLength: Infinity,
+          timeout: 600000, // 10 minutes timeout for large video uploads
         }
       );
 
