@@ -32,12 +32,13 @@ export class SubscriptionsService {
       console.log('🔵 [SUBSCRIPTIONS] Creating subscription:', createSubscriptionDto);
 
       // Check if user already has an active or pending subscription
+      // Note: CANCELLED subscriptions are ignored - user can create new subscription after cancelling
       const existingActiveSubscription = await this.getActiveSubscriptionByUserId(createSubscriptionDto.userId);
       if (existingActiveSubscription) {
         throw new BadRequestException('User already has an active subscription. Only one strategy subscription allowed at a time. Please renew the existing subscription instead.');
       }
 
-      // Also check for pending subscriptions
+      // Also check for pending subscriptions (exclude cancelled ones)
       const pendingSnapshot = await this.firestore
         .collection('subscriptions')
         .where('userId', '==', createSubscriptionDto.userId)
@@ -106,6 +107,9 @@ export class SubscriptionsService {
         progressPercentage: 0,
         currentVideoId: videoProgress[0]?.videoId || null,
         amountPaid,
+        coachCommissionPercentage: createSubscriptionDto.coachCommissionPercentage ?? 30, // Save commission percentage
+        paymentMethod: createSubscriptionDto.paymentMethod || 'manual', // Payment method
+        notes: createSubscriptionDto.notes || '', // Admin notes
         renewalCount: 0,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -119,6 +123,14 @@ export class SubscriptionsService {
       const coachId = userData?.assignedCoachId;
       const coachName = userData?.assignedCoachName;
       const commissionPercentage = createSubscriptionDto.coachCommissionPercentage ?? 30; // Default 30%
+      const paymentMethod = createSubscriptionDto.paymentMethod || 'manual';
+
+      console.log('💰 [SUBSCRIPTIONS] Processing payment:', {
+        paymentMethod,
+        amountPaid,
+        commissionPercentage,
+        createSubscriptionDto
+      });
 
       await this.walletsService.processSubscriptionPayment(
         docRef.id,
@@ -129,6 +141,7 @@ export class SubscriptionsService {
         coachId,
         coachName,
         commissionPercentage,
+        paymentMethod,
       );
 
       return this.getSubscriptionById(docRef.id);
@@ -316,7 +329,7 @@ export class SubscriptionsService {
         }));
 
         // Update with new strategy
-        await this.firestore.collection('subscriptions').doc(id).update({
+        const updateData: any = {
           strategyId,
           strategyName,
           strategyNumber,
@@ -335,10 +348,27 @@ export class SubscriptionsService {
           amountPaid,
           renewalCount: (subscription.renewalCount || 0) + 1,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        };
+
+        // Update commission percentage if provided
+        if (renewDto.coachCommissionPercentage !== undefined) {
+          updateData.coachCommissionPercentage = renewDto.coachCommissionPercentage;
+        }
+
+        // Update payment method if provided
+        if (renewDto.paymentMethod) {
+          updateData.paymentMethod = renewDto.paymentMethod;
+        }
+
+        // Update notes if provided
+        if (renewDto.notes) {
+          updateData.notes = renewDto.notes;
+        }
+
+        await this.firestore.collection('subscriptions').doc(id).update(updateData);
       } else {
         // Same strategy renewal
-        await this.firestore.collection('subscriptions').doc(id).update({
+        const updateData: any = {
           status: SubscriptionStatus.ACTIVE,
           startDate: admin.firestore.Timestamp.fromDate(startDate),
           endDate: admin.firestore.Timestamp.fromDate(endDate),
@@ -346,7 +376,24 @@ export class SubscriptionsService {
           amountPaid,
           renewalCount: (subscription.renewalCount || 0) + 1,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        };
+
+        // Update commission percentage if provided
+        if (renewDto.coachCommissionPercentage !== undefined) {
+          updateData.coachCommissionPercentage = renewDto.coachCommissionPercentage;
+        }
+
+        // Update payment method if provided
+        if (renewDto.paymentMethod) {
+          updateData.paymentMethod = renewDto.paymentMethod;
+        }
+
+        // Update notes if provided
+        if (renewDto.notes) {
+          updateData.notes = renewDto.notes;
+        }
+
+        await this.firestore.collection('subscriptions').doc(id).update(updateData);
       }
 
       console.log('✅ [SUBSCRIPTIONS] Subscription renewed');
@@ -356,7 +403,17 @@ export class SubscriptionsService {
       const userData = userDoc.data();
       const coachId = userData?.assignedCoachId;
       const coachName = userData?.assignedCoachName;
-      const commissionPercentage = 30; // Default 30% for renewals
+      
+      // Use commission from renewDto if provided, otherwise use existing subscription's commission, default to 30%
+      const commissionPercentage = renewDto.coachCommissionPercentage ?? subscription.coachCommissionPercentage ?? 30;
+      const paymentMethod = renewDto.paymentMethod || 'manual';
+
+      console.log('💰 [SUBSCRIPTIONS] Processing renewal payment:', {
+        paymentMethod,
+        amountPaid,
+        commissionPercentage,
+        renewDto
+      });
 
       await this.walletsService.processSubscriptionPayment(
         id,
@@ -367,6 +424,7 @@ export class SubscriptionsService {
         coachId,
         coachName,
         commissionPercentage,
+        paymentMethod,
       );
 
       return this.getSubscriptionById(id);
@@ -546,12 +604,18 @@ export class SubscriptionsService {
       console.log('🔵 [SUBSCRIPTIONS] Initiating user subscription:', { userId, strategyId, walletAddress, currency });
 
       // Check if user already has an active or pending subscription
+      // Note: CANCELLED subscriptions are ignored - user can create new subscription after cancelling
+      console.log('🔍 [DEBUG] Checking for active subscription...');
       const existingActiveSubscription = await this.getActiveSubscriptionByUserId(userId);
+      console.log('🔍 [DEBUG] Active subscription result:', existingActiveSubscription);
+      
       if (existingActiveSubscription) {
+        console.log('❌ [DEBUG] Found active subscription, blocking new subscription');
         throw new BadRequestException('You already have an active subscription. Only one strategy subscription allowed at a time.');
       }
 
-      // Check for pending subscriptions
+      // Check for pending subscriptions (exclude cancelled ones)
+      console.log('🔍 [DEBUG] Checking for pending subscription...');
       const pendingSnapshot = await this.firestore
         .collection('subscriptions')
         .where('userId', '==', userId)
@@ -559,9 +623,20 @@ export class SubscriptionsService {
         .limit(1)
         .get();
 
+      console.log('🔍 [DEBUG] Pending snapshot empty?', pendingSnapshot.empty);
       if (!pendingSnapshot.empty) {
+        console.log('🔍 [DEBUG] Found pending subscription:', {
+          id: pendingSnapshot.docs[0].id,
+          status: pendingSnapshot.docs[0].data().status
+        });
+      }
+
+      if (!pendingSnapshot.empty) {
+        console.log('❌ [DEBUG] Found pending subscription, blocking new subscription');
         throw new BadRequestException('You have a pending subscription that needs renewal. Please renew instead of creating a new one.');
       }
+
+      console.log('✅ [DEBUG] No active/pending subscriptions found, proceeding with new subscription');
 
       // Get user details
       const userDoc = await this.firestore.collection('users').doc(userId).get();
@@ -601,77 +676,24 @@ export class SubscriptionsService {
       const coachCommission = (strategyPrice * coachCommissionPercentage) / 100;
       const systemShare = strategyPrice - coachCommission;
 
-      // Get payment settings
-      const settingsDoc = await this.firestore.collection('payment_settings').doc('default').get();
-      const settings = settingsDoc.data();
-      const isTestMode = settings?.isTestMode ?? true;
+      // ALWAYS USE TEST MODE - NowPayments removed
+      console.log('🧪 [SUBSCRIPTIONS] Running in TEST MODE - NowPayments disabled');
+      
+      const testPaymentId = `test_payment_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      
+      const paymentData = {
+        paymentId: testPaymentId,
+        paymentAddress: walletAddress,
+        amount: strategyPrice,
+        strategyPrice,
+        coachCommissionPercentage,
+        coachCommission,
+        systemShare,
+        currency,
+        testMode: true,
+      };
 
-      console.log(`💰 [SUBSCRIPTIONS] Payment settings:`, {
-        isTestMode,
-        hasApiKey: !!settings?.apiKey,
-        isActive: settings?.isActive,
-        cryptoEnabled: settings?.cryptoEnabled,
-      });
-
-      let paymentData: any;
-      let pendingPaymentId: string;
-
-      if (isTestMode || !settings?.apiKey || !settings?.isActive || !settings?.cryptoEnabled) {
-        // TEST MODE or not configured - simulate payment
-        console.log('🧪 [SUBSCRIPTIONS] Running in TEST MODE - simulating payment');
-        console.log('Reason:', {
-          isTestMode,
-          missingApiKey: !settings?.apiKey,
-          notActive: !settings?.isActive,
-          cryptoNotEnabled: !settings?.cryptoEnabled,
-        });
-        
-        const testPaymentId = `test_payment_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-        
-        paymentData = {
-          paymentId: testPaymentId,
-          paymentAddress: settings?.nowPaymentsWallet || walletAddress,
-          amount: strategyPrice,
-          strategyPrice,
-          coachCommissionPercentage,
-          coachCommission,
-          systemShare,
-          currency,
-          testMode: true,
-        };
-
-        pendingPaymentId = `pending_${testPaymentId}`;
-      } else {
-        // PRODUCTION MODE - create real NOWPayments payment
-        console.log('🚀 [SUBSCRIPTIONS] Running in PRODUCTION MODE - creating real payment');
-
-        const orderId = `sub_${Date.now()}_${userId.substring(0, 8)}`;
-        
-        try {
-          const nowPayment = await this.paymentsService.createNowPayment(
-            strategyPrice,
-            currency,
-            orderId,
-            `${strategyData?.name} subscription for user ${userData?.email}`,
-          );
-
-          paymentData = {
-            ...nowPayment,
-            strategyPrice,
-            coachCommissionPercentage,
-            coachCommission,
-            systemShare,
-            testMode: false,
-          };
-
-          pendingPaymentId = `pending_${nowPayment.paymentId}`;
-        } catch (error) {
-          console.error('❌ [SUBSCRIPTIONS] Failed to create NOWPayments payment:', error);
-          throw new BadRequestException(
-            'Failed to create payment. Please check your payment settings and try again.',
-          );
-        }
-      }
+      const pendingPaymentId = `pending_${testPaymentId}`;
 
       // Store pending payment info
       await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
@@ -687,13 +709,42 @@ export class SubscriptionsService {
         systemShare,
         coachId: coachId || null,
         status: 'waiting',
-        testMode: isTestMode,
+        testMode: true,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       console.log('✅ [SUBSCRIPTIONS] Payment initiated:', pendingPaymentId);
 
-      return paymentData;
+      // ALWAYS CREATE SUBSCRIPTION IMMEDIATELY (NowPayments removed)
+      console.log('🧪 [SUBSCRIPTIONS] TEST MODE - Creating subscription immediately without payment confirmation');
+      
+      // Create subscription directly (same as confirmPayment would do)
+      const duration = 30; // 30 days
+      const amountPaid = strategyPrice;
+      const subscription = await this.createSubscription({
+        userId,
+        strategyId,
+        duration,
+        amountPaid,
+        coachCommissionPercentage,
+        paymentMethod: 'automatic',
+        notes: 'Test mode - auto-created',
+      });
+
+      console.log('✅ [SUBSCRIPTIONS] Test subscription created:', subscription.id);
+
+      // Mark pending payment as completed
+      await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
+        status: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Return payment data with subscription ID
+      return {
+        ...paymentData,
+        subscriptionId: subscription.id,
+        autoCreated: true,
+      };
     } catch (error) {
       console.error('❌ [SUBSCRIPTIONS] Error initiating subscription:', error);
       throw error;
@@ -717,6 +768,22 @@ export class SubscriptionsService {
         throw new NotFoundException('Payment not found');
       }
       const paymentData = paymentDoc.data();
+
+      // Check if payment was already completed (test mode auto-creates subscription)
+      if (paymentData?.status === 'completed') {
+        console.log('✅ [SUBSCRIPTIONS] Payment already processed (test mode auto-created)');
+        
+        // Get the existing subscription
+        const subscriptionDoc = await this.firestore.collection('subscriptions').doc(paymentData.subscriptionId).get();
+        if (subscriptionDoc.exists) {
+          const subscription = { id: subscriptionDoc.id, ...subscriptionDoc.data() } as Subscription;
+          return {
+            success: true,
+            subscription,
+            alreadyProcessed: true,
+          };
+        }
+      }
 
       // In production, this would verify the payment via NOWPayments webhook
       // For demo purposes, we'll simulate it
@@ -752,6 +819,7 @@ export class SubscriptionsService {
             strategyNumber: newStrategyData?.strategyNumber || 0,
             strategyPrice: newStrategyData?.price || 0,
             coachCommissionPercentage: paymentData.coachCommissionPercentage || 0,
+            paymentMethod: 'automatic', // User panel upgrades/downgrades are automatic
             completedVideos: [], // Reset progress for new strategy
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
@@ -761,6 +829,30 @@ export class SubscriptionsService {
           subscription = { id: updatedDoc.id, ...updatedDoc.data() } as Subscription;
 
           console.log(`✅ [SUBSCRIPTIONS] Existing subscription ${isDowngrade ? 'downgraded' : 'upgraded'} to new strategy`);
+
+          // Process payment with commission split for upgrade/downgrade
+          const userDoc = await this.firestore.collection('users').doc(paymentData.userId).get();
+          const userData = userDoc.data();
+          const coachId = userData?.assignedCoachId;
+          const coachName = userData?.assignedCoachName;
+          const commissionPercentage = paymentData?.coachCommissionPercentage ?? 30;
+          const upgradeAmount = paymentData?.amount || 0; // Amount paid for upgrade/downgrade
+
+          if (upgradeAmount > 0) {
+            await this.walletsService.processSubscriptionPayment(
+              existingSubId,
+              paymentData.userId,
+              subscription.userName,
+              newStrategyData?.name || 'Unknown Strategy',
+              upgradeAmount,
+              coachId,
+              coachName,
+              commissionPercentage,
+              'automatic', // User panel upgrades/downgrades are automatic
+            );
+
+            console.log('💰 [SUBSCRIPTIONS] Upgrade/downgrade payment processed through wallet');
+          }
         } else {
           throw new NotFoundException(`No active subscription found to ${isDowngrade ? 'downgrade' : 'upgrade'}`);
         }
@@ -787,6 +879,7 @@ export class SubscriptionsService {
           await this.firestore.collection('subscriptions').doc(pendingSubId).update({
             status: SubscriptionStatus.ACTIVE,
             endDate: admin.firestore.Timestamp.fromDate(newEndDate),
+            paymentMethod: 'automatic', // User panel renewals are automatic
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             // completedVideos is intentionally NOT modified - user continues from where they left off
           });
@@ -796,6 +889,28 @@ export class SubscriptionsService {
           subscription = { id: updatedDoc.id, ...updatedDoc.data() } as Subscription;
 
           console.log('✅ [SUBSCRIPTIONS] Pending subscription renewed');
+
+          // Process payment with commission split for renewal
+          const userDoc = await this.firestore.collection('users').doc(paymentData.userId).get();
+          const userData = userDoc.data();
+          const coachId = userData?.assignedCoachId;
+          const coachName = userData?.assignedCoachName;
+          const commissionPercentage = paymentData?.coachCommissionPercentage ?? 30;
+          const renewalAmount = 100; // Standard renewal amount
+
+          await this.walletsService.processSubscriptionPayment(
+            pendingSubId,
+            paymentData.userId,
+            subscription.userName,
+            subscription.strategyName,
+            renewalAmount,
+            coachId,
+            coachName,
+            commissionPercentage,
+            'automatic', // User panel renewals are automatic
+          );
+
+          console.log('💰 [SUBSCRIPTIONS] Renewal payment processed through wallet');
         } else {
           throw new NotFoundException('No pending subscription found to renew');
         }
@@ -808,6 +923,7 @@ export class SubscriptionsService {
           strategyId: paymentData?.strategyId,
           duration: 30,
           coachCommissionPercentage: paymentData?.coachCommissionPercentage || 0,
+          paymentMethod: 'automatic', // User panel subscriptions are automatic (3pay)
         };
 
         subscription = await this.createSubscription(createDto);
@@ -839,13 +955,21 @@ export class SubscriptionsService {
     try {
       console.log('🔵 [SUBSCRIPTIONS] Cancelling subscription for user:', userId);
 
-      const subscription = await this.getActiveSubscriptionByUserId(userId);
+      // Find any active OR pending subscription
+      const snapshot = await this.firestore
+        .collection('subscriptions')
+        .where('userId', '==', userId)
+        .where('status', 'in', [SubscriptionStatus.ACTIVE, SubscriptionStatus.PENDING])
+        .limit(1)
+        .get();
       
-      if (!subscription) {
-        throw new NotFoundException('No active subscription found');
+      if (snapshot.empty) {
+        throw new NotFoundException('No active or pending subscription found');
       }
 
-      await this.cancelSubscription(subscription.id);
+      const subscriptionId = snapshot.docs[0].id;
+      
+      await this.cancelSubscription(subscriptionId);
 
       console.log('✅ [SUBSCRIPTIONS] User subscription cancelled');
 
@@ -868,9 +992,15 @@ export class SubscriptionsService {
     currency: string,
   ): Promise<any> {
     try {
-      console.log('🔵 [SUBSCRIPTIONS] Renewing subscription for user:', userId);
+      console.log('🔵 [SUBSCRIPTIONS] ========================================');
+      console.log('🔵 [SUBSCRIPTIONS] RENEW SUBSCRIPTION CALLED');
+      console.log('🔵 [SUBSCRIPTIONS] userId:', userId);
+      console.log('🔵 [SUBSCRIPTIONS] walletAddress:', walletAddress);
+      console.log('🔵 [SUBSCRIPTIONS] currency:', currency);
+      console.log('🔵 [SUBSCRIPTIONS] ========================================');
 
       // Get current subscription
+      console.log('🔍 [SUBSCRIPTIONS] Looking for pending subscription...');
       const snapshot = await this.firestore
         .collection('subscriptions')
         .where('userId', '==', userId)
@@ -878,18 +1008,32 @@ export class SubscriptionsService {
         .limit(1)
         .get();
 
+      console.log('🔍 [SUBSCRIPTIONS] Pending subscription found?', !snapshot.empty);
       if (snapshot.empty) {
+        console.log('❌ [SUBSCRIPTIONS] No pending subscription found');
         throw new BadRequestException('No pending subscription found to renew');
       }
 
       const currentSub = this.mapSubscription(snapshot.docs[0]);
+      console.log('✅ [SUBSCRIPTIONS] Current subscription:', {
+        id: currentSub.id,
+        strategyId: currentSub.strategyId,
+        strategyName: currentSub.strategyName,
+        status: currentSub.status,
+      });
 
       // Renewal fee is always $100
       const renewalFee = 100;
+      console.log('💰 [SUBSCRIPTIONS] Renewal fee:', renewalFee);
 
       // Get user and coach info
+      console.log('🔍 [SUBSCRIPTIONS] Getting user data...');
       const userDoc = await this.firestore.collection('users').doc(userId).get();
       const userData = userDoc.data();
+      console.log('👤 [SUBSCRIPTIONS] User data:', {
+        assignedCoachId: userData?.assignedCoachId,
+        coachCommissionOverride: userData?.coachCommissionOverride,
+      });
 
       let coachCommissionPercentage = 0;
       let coachId = userData?.assignedCoachId;
@@ -897,18 +1041,24 @@ export class SubscriptionsService {
       if (coachId) {
         if (userData?.coachCommissionOverride !== undefined && userData?.coachCommissionOverride !== null) {
           coachCommissionPercentage = userData.coachCommissionOverride;
+          console.log('✅ [SUBSCRIPTIONS] Using user commission override:', coachCommissionPercentage);
         } else {
           const coachDoc = await this.firestore.collection('coaches').doc(coachId).get();
           if (coachDoc.exists) {
             const coachData = coachDoc.data();
             coachCommissionPercentage = coachData?.defaultCommissionPercentage ?? 30;
+            console.log('✅ [SUBSCRIPTIONS] Using coach default commission:', coachCommissionPercentage);
           } else {
             coachCommissionPercentage = 30;
+            console.log('⚠️ [SUBSCRIPTIONS] Coach not found, using default 30%');
           }
         }
+      } else {
+        console.log('⚠️ [SUBSCRIPTIONS] No coach assigned');
       }
 
       // Create payment
+      console.log('💳 [SUBSCRIPTIONS] Creating payment for renewal...');
       const paymentData = await this.createPaymentForRenewal(
         userId,
         currentSub.strategyId,
@@ -918,9 +1068,11 @@ export class SubscriptionsService {
         coachCommissionPercentage,
       );
 
+      console.log('✅ [SUBSCRIPTIONS] Payment data returned:', paymentData);
       return paymentData;
     } catch (error) {
       console.error('❌ [SUBSCRIPTIONS] Error renewing subscription:', error);
+      console.error('❌ [SUBSCRIPTIONS] Error stack:', error.stack);
       throw error;
     }
   }
@@ -935,26 +1087,76 @@ export class SubscriptionsService {
     currency: string,
   ): Promise<any> {
     try {
-      console.log('🔵 [SUBSCRIPTIONS] Upgrading subscription for user:', userId);
+      console.log('🔵 [SUBSCRIPTIONS] ========================================');
+      console.log('🔵 [SUBSCRIPTIONS] UPGRADE SUBSCRIPTION CALLED');
+      console.log('🔵 [SUBSCRIPTIONS] userId:', userId);
+      console.log('🔵 [SUBSCRIPTIONS] newStrategyId:', newStrategyId);
+      console.log('🔵 [SUBSCRIPTIONS] walletAddress:', walletAddress);
+      console.log('🔵 [SUBSCRIPTIONS] currency:', currency);
+      console.log('🔵 [SUBSCRIPTIONS] ========================================');
 
-      // Get current subscription
-      const currentSub = await this.getActiveSubscriptionByUserId(userId);
+      // Get current subscription (active OR pending)
+      console.log('🔍 [SUBSCRIPTIONS] Looking for active or pending subscription...');
+      
+      // Try active first
+      let currentSub = await this.getActiveSubscriptionByUserId(userId);
+      let isPending = false;
+      
+      // If no active, try pending
+      if (!currentSub) {
+        console.log('🔍 [SUBSCRIPTIONS] No active subscription, checking for pending...');
+        const pendingSnapshot = await this.firestore
+          .collection('subscriptions')
+          .where('userId', '==', userId)
+          .where('status', '==', SubscriptionStatus.PENDING)
+          .limit(1)
+          .get();
+          
+        if (!pendingSnapshot.empty) {
+          currentSub = this.mapSubscription(pendingSnapshot.docs[0]);
+          isPending = true;
+          console.log('✅ [SUBSCRIPTIONS] Found pending subscription');
+        }
+      }
       
       if (!currentSub) {
-        throw new BadRequestException('No active subscription found');
+        console.log('❌ [SUBSCRIPTIONS] No active or pending subscription found');
+        throw new BadRequestException('No active or pending subscription found');
       }
 
+      console.log('✅ [SUBSCRIPTIONS] Current subscription:', {
+        id: currentSub.id,
+        strategyId: currentSub.strategyId,
+        strategyName: currentSub.strategyName,
+        strategyPrice: currentSub.strategyPrice,
+        status: isPending ? 'PENDING' : 'ACTIVE',
+      });
+
       // Get new strategy
+      console.log('🔍 [SUBSCRIPTIONS] Getting new strategy data...');
       const newStrategyDoc = await this.firestore.collection('strategies').doc(newStrategyId).get();
       if (!newStrategyDoc.exists) {
+        console.log('❌ [SUBSCRIPTIONS] New strategy not found');
         throw new NotFoundException('New strategy not found');
       }
       const newStrategyData = newStrategyDoc.data();
       const newPrice = newStrategyData?.price || 0;
+      
+      console.log('✅ [SUBSCRIPTIONS] New strategy:', {
+        id: newStrategyId,
+        name: newStrategyData?.name,
+        price: newPrice,
+      });
 
       // Calculate difference (absolute value)
       const currentPrice = currentSub.strategyPrice;
       const priceDifference = Math.abs(newPrice - currentPrice);
+
+      console.log('💰 [SUBSCRIPTIONS] Price comparison:', {
+        currentPrice,
+        newPrice,
+        priceDifference,
+      });
 
       // If same price, no payment needed - just switch
       if (newPrice === currentPrice) {
@@ -991,6 +1193,7 @@ export class SubscriptionsService {
       console.log(`   Amount to pay: $${amountToPay} ${isDowngrade ? '(full new strategy price)' : '(difference)'}`);
 
       // Get user and coach info
+      console.log('🔍 [SUBSCRIPTIONS] Getting user data...');
       const userDoc = await this.firestore.collection('users').doc(userId).get();
       const userData = userDoc.data();
 
@@ -1000,18 +1203,22 @@ export class SubscriptionsService {
       if (coachId) {
         if (userData?.coachCommissionOverride !== undefined && userData?.coachCommissionOverride !== null) {
           coachCommissionPercentage = userData.coachCommissionOverride;
+          console.log('✅ [SUBSCRIPTIONS] Using user commission override:', coachCommissionPercentage);
         } else {
           const coachDoc = await this.firestore.collection('coaches').doc(coachId).get();
           if (coachDoc.exists) {
             const coachData = coachDoc.data();
             coachCommissionPercentage = coachData?.defaultCommissionPercentage ?? 30;
+            console.log('✅ [SUBSCRIPTIONS] Using coach default commission:', coachCommissionPercentage);
           } else {
             coachCommissionPercentage = 30;
+            console.log('⚠️ [SUBSCRIPTIONS] Coach not found, using default 30%');
           }
         }
       }
 
       // Create payment for upgrade or downgrade
+      console.log(`💳 [SUBSCRIPTIONS] Creating payment for ${isDowngrade ? 'downgrade' : 'upgrade'}...`);
       const paymentData = isDowngrade 
         ? await this.createPaymentForDowngrade(
             userId,
@@ -1034,9 +1241,11 @@ export class SubscriptionsService {
             coachCommissionPercentage,
           );
 
+      console.log('✅ [SUBSCRIPTIONS] Payment data returned:', paymentData);
       return paymentData;
     } catch (error) {
       console.error('❌ [SUBSCRIPTIONS] Error upgrading subscription:', error);
+      console.error('❌ [SUBSCRIPTIONS] Error stack:', error.stack);
       throw error;
     }
   }
@@ -1052,57 +1261,37 @@ export class SubscriptionsService {
     currency: string,
     coachCommissionPercentage: number,
   ): Promise<any> {
+    console.log('💳 [RENEWAL] ========================================');
+    console.log('💳 [RENEWAL] Creating payment for renewal');
+    console.log('💳 [RENEWAL] amount:', amount);
+    console.log('💳 [RENEWAL] coachCommissionPercentage:', coachCommissionPercentage);
+    
     const coachCommission = (amount * coachCommissionPercentage) / 100;
     const systemShare = amount - coachCommission;
 
-    const settingsDoc = await this.firestore.collection('payment_settings').doc('default').get();
-    const settings = settingsDoc.data();
-    const isTestMode = settings?.isTestMode ?? true;
+    console.log('💳 [RENEWAL] Commission split:', { coachCommission, systemShare });
 
-    let paymentData: any;
-    let pendingPaymentId: string;
+    // ALWAYS TEST MODE - NowPayments removed
+    console.log('🧪 [RENEWAL] Running in TEST MODE - NowPayments disabled');
+    
+    const paymentData = {
+      paymentId: `test_renewal_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+      paymentAddress: walletAddress,
+      amount,
+      strategyPrice: amount,
+      coachCommissionPercentage,
+      coachCommission,
+      systemShare,
+      currency,
+      testMode: true,
+      type: 'renewal',
+    };
+    
+    const pendingPaymentId = `pending_${paymentData.paymentId}`;
+    console.log('💳 [RENEWAL] Generated payment ID:', paymentData.paymentId);
+    console.log('💳 [RENEWAL] Pending payment ID:', pendingPaymentId);
 
-    if (isTestMode || !settings?.apiKey || !settings?.isActive || !settings?.cryptoEnabled) {
-      paymentData = {
-        paymentId: `test_renewal_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-        paymentAddress: settings?.nowPaymentsWallet || walletAddress,
-        amount,
-        strategyPrice: amount,
-        coachCommissionPercentage,
-        coachCommission,
-        systemShare,
-        currency,
-        testMode: true,
-        type: 'renewal',
-      };
-      pendingPaymentId = `pending_${paymentData.paymentId}`;
-    } else {
-      const orderId = `renewal_${Date.now()}_${userId.substring(0, 8)}`;
-
-      try {
-        const nowPayment = await this.paymentsService.createNowPayment(
-          amount,
-          currency,
-          orderId,
-          `Subscription renewal for user`,
-        );
-
-        paymentData = {
-          ...nowPayment,
-          strategyPrice: amount,
-          coachCommissionPercentage,
-          coachCommission,
-          systemShare,
-          testMode: false,
-          type: 'renewal',
-        };
-
-        pendingPaymentId = `pending_${nowPayment.paymentId}`;
-      } catch (error) {
-        throw new BadRequestException('Failed to create payment');
-      }
-    }
-
+    console.log('💾 [RENEWAL] Saving pending payment to Firestore...');
     await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
       userId,
       strategyId,
@@ -1115,12 +1304,96 @@ export class SubscriptionsService {
       coachCommission,
       systemShare,
       status: 'waiting',
-      testMode: isTestMode,
+      testMode: true,
       type: 'renewal',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+    console.log('✅ [RENEWAL] Pending payment saved');
 
-    return paymentData;
+    // ALWAYS CREATE RENEWAL IMMEDIATELY (NowPayments removed)
+    console.log('🧪 [RENEWAL] TEST MODE - Processing renewal immediately');
+    
+    // Find the pending subscription
+    console.log('🔍 [RENEWAL] Looking for pending subscription...');
+    const pendingSnapshot = await this.firestore
+      .collection('subscriptions')
+      .where('userId', '==', userId)
+      .where('status', '==', SubscriptionStatus.PENDING)
+      .limit(1)
+      .get();
+
+    console.log('🔍 [RENEWAL] Found pending subscription?', !pendingSnapshot.empty);
+
+    if (!pendingSnapshot.empty) {
+      const pendingSubDoc = pendingSnapshot.docs[0];
+      const pendingSubId = pendingSubDoc.id;
+      const pendingSubData = pendingSubDoc.data();
+      
+      console.log('✅ [RENEWAL] Pending subscription:', {
+        id: pendingSubId,
+        strategyName: pendingSubData.strategyName,
+        currentStatus: pendingSubData.status,
+      });
+
+      // Renew the subscription (30 more days from now)
+      const newEndDate = new Date();
+      newEndDate.setDate(newEndDate.getDate() + 30);
+      
+      console.log('🔄 [RENEWAL] Updating subscription status to ACTIVE...');
+      console.log('🔄 [RENEWAL] New end date:', newEndDate);
+
+      await this.firestore.collection('subscriptions').doc(pendingSubId).update({
+        status: SubscriptionStatus.ACTIVE,
+        endDate: admin.firestore.Timestamp.fromDate(newEndDate),
+        paymentMethod: 'automatic',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      console.log('✅ [RENEWAL] Pending subscription renewed to ACTIVE');
+
+      // Process payment with commission split
+      console.log('💰 [RENEWAL] Processing wallet payment...');
+      const userDoc = await this.firestore.collection('users').doc(userId).get();
+      const userData = userDoc.data();
+      const coachId = userData?.assignedCoachId;
+      const coachName = userData?.assignedCoachName;
+      
+      console.log('💰 [RENEWAL] Coach info:', { coachId, coachName });
+
+      await this.walletsService.processSubscriptionPayment(
+        pendingSubId,
+        userId,
+        pendingSubData.userName,
+        pendingSubData.strategyName,
+        amount,
+        coachId,
+        coachName,
+        coachCommissionPercentage,
+        'automatic',
+      );
+
+      console.log('💰 [RENEWAL] Renewal payment processed through wallet');
+
+      // Mark pending payment as completed
+      console.log('💾 [RENEWAL] Marking pending payment as completed...');
+      await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
+        status: 'completed',
+        subscriptionId: pendingSubId,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      
+      console.log('✅ [RENEWAL] Pending payment marked as completed');
+    } else {
+      console.log('❌ [RENEWAL] No pending subscription found!');
+    }
+
+    console.log('✅ [RENEWAL] Renewal process completed');
+    console.log('💳 [RENEWAL] ========================================');
+    
+    return {
+      ...paymentData,
+      autoCreated: true,
+    };
   }
 
   /**
@@ -1139,53 +1412,23 @@ export class SubscriptionsService {
     const coachCommission = (amount * coachCommissionPercentage) / 100;
     const systemShare = amount - coachCommission;
 
-    const settingsDoc = await this.firestore.collection('payment_settings').doc('default').get();
-    const settings = settingsDoc.data();
-    const isTestMode = settings?.isTestMode ?? true;
-
-    let paymentData: any;
-    let pendingPaymentId: string;
-
-    if (isTestMode || !settings?.apiKey || !settings?.isActive || !settings?.cryptoEnabled) {
-      paymentData = {
-        paymentId: `test_upgrade_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-        paymentAddress: settings?.nowPaymentsWallet || walletAddress,
-        amount,
-        strategyPrice: amount,
-        coachCommissionPercentage,
-        coachCommission,
-        systemShare,
-        currency,
-        testMode: true,
-        type: 'upgrade',
-      };
-      pendingPaymentId = `pending_${paymentData.paymentId}`;
-    } else {
-      const orderId = `upgrade_${Date.now()}_${userId.substring(0, 8)}`;
-
-      try {
-        const nowPayment = await this.paymentsService.createNowPayment(
-          amount,
-          currency,
-          orderId,
-          `Subscription upgrade for user`,
-        );
-
-        paymentData = {
-          ...nowPayment,
-          strategyPrice: amount,
-          coachCommissionPercentage,
-          coachCommission,
-          systemShare,
-          testMode: false,
-          type: 'upgrade',
-        };
-
-        pendingPaymentId = `pending_${nowPayment.paymentId}`;
-      } catch (error) {
-        throw new BadRequestException('Failed to create payment');
-      }
-    }
+    // ALWAYS TEST MODE - NowPayments removed
+    console.log('🧪 [SUBSCRIPTIONS] Running in TEST MODE - NowPayments disabled');
+    
+    const paymentData = {
+      paymentId: `test_upgrade_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+      paymentAddress: walletAddress,
+      amount,
+      strategyPrice: amount,
+      coachCommissionPercentage,
+      coachCommission,
+      systemShare,
+      currency,
+      testMode: true,
+      type: 'upgrade',
+    };
+    
+    const pendingPaymentId = `pending_${paymentData.paymentId}`;
 
     await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
       userId,
@@ -1201,12 +1444,84 @@ export class SubscriptionsService {
       coachCommission,
       systemShare,
       status: 'waiting',
-      testMode: isTestMode,
+      testMode: true,
       type: 'upgrade',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return paymentData;
+    // ALWAYS PROCESS UPGRADE IMMEDIATELY (NowPayments removed)
+    console.log('🧪 [SUBSCRIPTIONS] TEST MODE - Processing upgrade immediately');
+    
+    // Get new strategy data
+    const newStrategyDoc = await this.firestore.collection('strategies').doc(newStrategyId).get();
+    const newStrategyData = newStrategyDoc.data();
+
+    // Set new start and end dates (30 days from now)
+    const newStartDate = new Date();
+    const newEndDate = new Date();
+    newEndDate.setDate(newEndDate.getDate() + 30);
+    
+    console.log('📅 [SUBSCRIPTIONS] New subscription period:', {
+      startDate: newStartDate,
+      endDate: newEndDate,
+    });
+
+    // Update the existing subscription to the new strategy AND make it ACTIVE with new dates
+    await this.firestore.collection('subscriptions').doc(currentSubscriptionId).update({
+      strategyId: newStrategyId,
+      strategyName: newStrategyData?.name,
+      strategyNumber: newStrategyData?.strategyNumber || 0,
+      strategyPrice: newStrategyData?.price || 0,
+      coachCommissionPercentage: coachCommissionPercentage,
+      status: SubscriptionStatus.ACTIVE, // Make it ACTIVE
+      startDate: admin.firestore.Timestamp.fromDate(newStartDate), // New start date
+      endDate: admin.firestore.Timestamp.fromDate(newEndDate), // New end date (30 days)
+      paymentMethod: 'automatic',
+      completedVideos: [], // Reset progress for new strategy
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    
+    console.log('✅ [SUBSCRIPTIONS] Subscription upgraded: ACTIVE status, new 30-day period');
+
+    // Get subscription data for wallet processing
+    const updatedDoc = await this.firestore.collection('subscriptions').doc(currentSubscriptionId).get();
+    const updatedSubData = updatedDoc.data();
+
+    console.log('✅ [SUBSCRIPTIONS] Existing subscription upgraded to new strategy');
+
+    // Process payment with commission split for upgrade
+    const userDoc = await this.firestore.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    const coachId = userData?.assignedCoachId;
+    const coachName = userData?.assignedCoachName;
+
+    if (amount > 0 && updatedSubData) {
+      await this.walletsService.processSubscriptionPayment(
+        currentSubscriptionId,
+        userId,
+        updatedSubData.userName,
+        newStrategyData?.name || 'Unknown Strategy',
+        amount,
+        coachId,
+        coachName,
+        coachCommissionPercentage,
+        'automatic',
+      );
+
+      console.log('💰 [SUBSCRIPTIONS] Upgrade payment processed through wallet');
+    }
+
+    // Mark pending payment as completed
+    await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
+      status: 'completed',
+      subscriptionId: currentSubscriptionId,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return {
+      ...paymentData,
+      autoCreated: true,
+    };
   }
 
   /**
@@ -1225,53 +1540,23 @@ export class SubscriptionsService {
     const coachCommission = (amount * coachCommissionPercentage) / 100;
     const systemShare = amount - coachCommission;
 
-    const settingsDoc = await this.firestore.collection('payment_settings').doc('default').get();
-    const settings = settingsDoc.data();
-    const isTestMode = settings?.isTestMode ?? true;
-
-    let paymentData: any;
-    let pendingPaymentId: string;
-
-    if (isTestMode || !settings?.apiKey || !settings?.isActive || !settings?.cryptoEnabled) {
-      paymentData = {
-        paymentId: `test_downgrade_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-        paymentAddress: settings?.nowPaymentsWallet || walletAddress,
-        amount,
-        strategyPrice: amount,
-        coachCommissionPercentage,
-        coachCommission,
-        systemShare,
-        currency,
-        testMode: true,
-        type: 'downgrade',
-      };
-      pendingPaymentId = `pending_${paymentData.paymentId}`;
-    } else {
-      const orderId = `downgrade_${Date.now()}_${userId.substring(0, 8)}`;
-
-      try {
-        const nowPayment = await this.paymentsService.createNowPayment(
-          amount,
-          currency,
-          orderId,
-          `Subscription downgrade for user (renewal fee)`,
-        );
-
-        paymentData = {
-          ...nowPayment,
-          strategyPrice: amount,
-          coachCommissionPercentage,
-          coachCommission,
-          systemShare,
-          testMode: false,
-          type: 'downgrade',
-        };
-
-        pendingPaymentId = `pending_${nowPayment.paymentId}`;
-      } catch (error) {
-        throw new BadRequestException('Failed to create payment');
-      }
-    }
+    // ALWAYS TEST MODE - NowPayments removed
+    console.log('🧪 [SUBSCRIPTIONS] Running in TEST MODE - NowPayments disabled');
+    
+    const paymentData = {
+      paymentId: `test_downgrade_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+      paymentAddress: walletAddress,
+      amount,
+      strategyPrice: amount,
+      coachCommissionPercentage,
+      coachCommission,
+      systemShare,
+      currency,
+      testMode: true,
+      type: 'downgrade',
+    };
+    
+    const pendingPaymentId = `pending_${paymentData.paymentId}`;
 
     await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
       userId,
@@ -1287,12 +1572,84 @@ export class SubscriptionsService {
       coachCommission,
       systemShare,
       status: 'waiting',
-      testMode: isTestMode,
+      testMode: true,
       type: 'downgrade',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return paymentData;
+    // ALWAYS PROCESS DOWNGRADE IMMEDIATELY (NowPayments removed)
+    console.log('🧪 [SUBSCRIPTIONS] TEST MODE - Processing downgrade immediately');
+    
+    // Get new strategy data
+    const newStrategyDoc = await this.firestore.collection('strategies').doc(newStrategyId).get();
+    const newStrategyData = newStrategyDoc.data();
+
+    // Set new start and end dates (30 days from now)
+    const newStartDate = new Date();
+    const newEndDate = new Date();
+    newEndDate.setDate(newEndDate.getDate() + 30);
+    
+    console.log('📅 [SUBSCRIPTIONS] New subscription period:', {
+      startDate: newStartDate,
+      endDate: newEndDate,
+    });
+
+    // Update the existing subscription to the new strategy AND make it ACTIVE with new dates
+    await this.firestore.collection('subscriptions').doc(currentSubscriptionId).update({
+      strategyId: newStrategyId,
+      strategyName: newStrategyData?.name,
+      strategyNumber: newStrategyData?.strategyNumber || 0,
+      strategyPrice: newStrategyData?.price || 0,
+      coachCommissionPercentage: coachCommissionPercentage,
+      status: SubscriptionStatus.ACTIVE, // Make it ACTIVE
+      startDate: admin.firestore.Timestamp.fromDate(newStartDate), // New start date
+      endDate: admin.firestore.Timestamp.fromDate(newEndDate), // New end date (30 days)
+      paymentMethod: 'automatic',
+      completedVideos: [], // Reset progress for new strategy
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    
+    console.log('✅ [SUBSCRIPTIONS] Subscription downgraded: ACTIVE status, new 30-day period');
+
+    // Get subscription data for wallet processing
+    const updatedDoc = await this.firestore.collection('subscriptions').doc(currentSubscriptionId).get();
+    const updatedSubData = updatedDoc.data();
+
+    console.log('✅ [SUBSCRIPTIONS] Existing subscription downgraded to new strategy');
+
+    // Process payment with commission split for downgrade
+    const userDoc = await this.firestore.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    const coachId = userData?.assignedCoachId;
+    const coachName = userData?.assignedCoachName;
+
+    if (amount > 0 && updatedSubData) {
+      await this.walletsService.processSubscriptionPayment(
+        currentSubscriptionId,
+        userId,
+        updatedSubData.userName,
+        newStrategyData?.name || 'Unknown Strategy',
+        amount,
+        coachId,
+        coachName,
+        coachCommissionPercentage,
+        'automatic',
+      );
+
+      console.log('💰 [SUBSCRIPTIONS] Downgrade payment processed through wallet');
+    }
+
+    // Mark pending payment as completed
+    await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
+      status: 'completed',
+      subscriptionId: currentSubscriptionId,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return {
+      ...paymentData,
+      autoCreated: true,
+    };
   }
 
   /**

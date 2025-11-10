@@ -14,5 +14,18 @@ export class RenewSubscriptionDto {
   @IsOptional()
   @Min(0, { message: 'Amount must be 0 or greater' })
   customAmount?: number; // Custom renewal amount set by admin
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  coachCommissionPercentage?: number; // Override coach commission percentage
+
+  @IsString()
+  @IsOptional()
+  paymentMethod?: string; // manual, bank_transfer, cash, paypal, promo, other
+
+  @IsString()
+  @IsOptional()
+  notes?: string; // Admin notes for manual renewals
 }
 

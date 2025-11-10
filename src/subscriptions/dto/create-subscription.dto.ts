@@ -23,5 +23,13 @@ export class CreateSubscriptionDto {
   @IsOptional()
   @Min(0)
   coachCommissionPercentage?: number; // 0-100
+
+  @IsString()
+  @IsOptional()
+  paymentMethod?: string; // manual, bank_transfer, cash, paypal, promo, other
+
+  @IsString()
+  @IsOptional()
+  notes?: string; // Admin notes for manual subscriptions
 }
 

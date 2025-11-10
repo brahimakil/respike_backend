@@ -294,6 +294,45 @@ export class PaymentsService {
     createPaymentDto: CreatePaymentDto,
   ): Promise<PaymentTransaction> {
     try {
+      // ⚡ TEST MODE: Skip NowPayments API and auto-approve
+      const TEST_MODE = true; // Set to false when integrating 3pay
+      
+      if (TEST_MODE) {
+        console.log('🧪 [PAYMENTS] TEST MODE - Skipping NowPayments API');
+        
+        const testPaymentId = `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Create test transaction
+        const transaction: any = {
+          userId,
+          orderId: createPaymentDto.orderId,
+          amount: createPaymentDto.amount,
+          currency: createPaymentDto.currency,
+          payCurrency: createPaymentDto.payCurrency,
+          payAmount: createPaymentDto.amount, // Same as price in test mode
+          status: PaymentStatus.WAITING,
+          paymentId: testPaymentId,
+          payAddress: 'test_address_no_payment_needed',
+          paymentUrl: '',
+          testMode: true, // Flag to indicate test mode
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          expiresAt: null,
+        };
+
+        const docRef = await this.firestore.collection('payment_transactions').add(transaction);
+
+        console.log('✅ [PAYMENTS] Test payment created:', testPaymentId);
+
+        return {
+          id: docRef.id,
+          ...transaction,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as PaymentTransaction;
+      }
+
+      // PRODUCTION MODE: Use NowPayments API
       const settings = await this.getPaymentSettings();
 
       if (!settings || !settings.isActive) {

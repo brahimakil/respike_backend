@@ -204,9 +204,16 @@ export class WalletsService {
     coachId?: string,
     coachName?: string,
     commissionPercentage?: number,
+    paymentMethod?: string,
   ): Promise<CoachCommission | null> {
     try {
-      console.log(`🔵 [WALLET] Processing payment: $${totalAmount} for subscription ${subscriptionId}`);
+      console.log(`🔵 [WALLET] Processing payment:`, {
+        subscriptionId,
+        totalAmount,
+        paymentMethod,
+        coachId,
+        commissionPercentage
+      });
 
       // Get system wallet
       const systemWallet = await this.getSystemWallet();
@@ -220,7 +227,7 @@ export class WalletsService {
           `Subscription payment from ${userName} for ${strategyName}`,
           subscriptionId,
           'subscription',
-          { userId, strategyName },
+          { userId, strategyName, paymentMethod },
         );
 
         console.log(`✅ [WALLET] Full amount $${totalAmount} added to system wallet (no coach)`);
@@ -241,7 +248,7 @@ export class WalletsService {
         `Commission (${commissionPercentage}%) from ${userName}'s subscription to ${strategyName}`,
         subscriptionId,
         'commission',
-        { userId, userName, strategyName, totalAmount, commissionPercentage },
+        { userId, userName, strategyName, totalAmount, commissionPercentage, paymentMethod },
       );
 
       // Add system amount
@@ -252,7 +259,7 @@ export class WalletsService {
         `System share from ${userName}'s subscription to ${strategyName} (Coach: ${coachName})`,
         subscriptionId,
         'subscription',
-        { userId, userName, strategyName, coachId, coachName, totalAmount, commissionPercentage },
+        { userId, userName, strategyName, coachId, coachName, totalAmount, commissionPercentage, paymentMethod },
       );
 
       // Record commission

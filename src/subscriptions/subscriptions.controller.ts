@@ -113,6 +113,15 @@ export class SubscriptionsController {
   // ============================================
   @Post()
   async createSubscription(@Body() createSubscriptionDto: CreateSubscriptionDto) {
+    console.log('🎯 [CONTROLLER] Received createSubscription request:', {
+      userId: createSubscriptionDto.userId,
+      strategyId: createSubscriptionDto.strategyId,
+      amountPaid: createSubscriptionDto.amountPaid,
+      paymentMethod: createSubscriptionDto.paymentMethod,
+      notes: createSubscriptionDto.notes,
+      coachCommissionPercentage: createSubscriptionDto.coachCommissionPercentage,
+      fullDto: createSubscriptionDto
+    });
     return this.subscriptionsService.createSubscription(createSubscriptionDto);
   }
 
