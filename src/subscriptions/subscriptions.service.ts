@@ -3,6 +3,7 @@ import * as admin from 'firebase-admin';
 import { FirebaseConfig } from '../database/firebase/firebase.config';
 import { WalletsService } from '../wallets/wallets.service';
 import { PaymentsService } from '../payments/payments.service';
+import { ThreePayService } from '../services/threepay.service';
 import {
   Subscription,
   SubscriptionStatus,
@@ -20,6 +21,7 @@ export class SubscriptionsService {
     @Inject(FirebaseConfig) private firebaseConfig: FirebaseConfig,
     @Inject(WalletsService) private walletsService: WalletsService,
     @Inject(forwardRef(() => PaymentsService)) private paymentsService: PaymentsService,
+    private threePayService: ThreePayService,
   ) {
     this.firestore = this.firebaseConfig.getFirestore();
   }
@@ -676,32 +678,58 @@ export class SubscriptionsService {
       const coachCommission = (strategyPrice * coachCommissionPercentage) / 100;
       const systemShare = strategyPrice - coachCommission;
 
-      // ALWAYS USE TEST MODE - NowPayments removed
-      console.log('🧪 [SUBSCRIPTIONS] Running in TEST MODE - NowPayments disabled');
+      console.log('💳 [SUBSCRIPTIONS] Creating 3pa-y payment transaction...');
+      console.log(`💰 [SUBSCRIPTIONS] Amount: $${strategyPrice}`);
+      console.log(`🏦 [SUBSCRIPTIONS] Currency: ${currency}`);
+
+      // Map user currency to 3pa-y currency type
+      let currencyType: 'USDT-TRC20' | 'USDT-ERC20' = 'USDT-TRC20';
+      if (currency.toLowerCase().includes('erc')) {
+        currencyType = 'USDT-ERC20';
+      }
+
+      // Get callback URL - use placeholder for localhost
+      const backendUrl = process.env.BACKEND_URL || 'http://localhost:3000';
+      let callbackUrl: string;
       
-      const testPaymentId = `test_payment_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      if (backendUrl.includes('localhost') || backendUrl.includes('127.0.0.1')) {
+        // For local development, use a publicly accessible placeholder URL
+        // 3pa-y requires valid URLs, so we use their example URL
+        callbackUrl = 'https://3pa-y.com/webhook';
+        console.log('⚠️ [SUBSCRIPTIONS] Local development detected - using placeholder webhook URL');
+        console.log('⚠️ [SUBSCRIPTIONS] You will need to manually verify payments or use ngrok for real webhooks');
+      } else {
+        callbackUrl = `${backendUrl}/payments/webhook/3pay`;
+      }
       
-      const paymentData = {
-        paymentId: testPaymentId,
-        paymentAddress: walletAddress,
+      console.log('🔔 [SUBSCRIPTIONS] Callback URL:', callbackUrl);
+      
+      const threePayTransaction = await this.threePayService.createTransaction({
         amount: strategyPrice,
-        strategyPrice,
-        coachCommissionPercentage,
-        coachCommission,
-        systemShare,
-        currency,
-        testMode: true,
-      };
+        currencyType,
+        callbackUrl,
+      });
 
-      const pendingPaymentId = `pending_${testPaymentId}`;
+      console.log('✅ [SUBSCRIPTIONS] 3pa-y transaction created:', threePayTransaction);
 
-      // Store pending payment info
+      const transactionId = threePayTransaction.transactionId || threePayTransaction.transaction_id || threePayTransaction.id;
+      const paymentUrl = threePayTransaction.paymentUrl || threePayTransaction.payment_url || threePayTransaction.url;
+
+      if (!transactionId || !paymentUrl) {
+        console.error('❌ [SUBSCRIPTIONS] Invalid 3pa-y response:', threePayTransaction);
+        throw new BadRequestException('Failed to create payment transaction');
+      }
+
+      // Store pending payment info with 3pa-y transaction ID
+      const pendingPaymentId = `pending_3pay_${transactionId}`;
+
       await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
         userId,
         strategyId,
         userWalletAddress: walletAddress,
-        paymentId: paymentData.paymentId,
-        currency,
+        threePayTransactionId: transactionId,
+        paymentUrl,
+        currency: currencyType,
         amount: strategyPrice,
         strategyPrice,
         coachCommissionPercentage,
@@ -709,41 +737,22 @@ export class SubscriptionsService {
         systemShare,
         coachId: coachId || null,
         status: 'waiting',
-        testMode: true,
+        type: 'subscription',
+        testMode: false,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      console.log('✅ [SUBSCRIPTIONS] Payment initiated:', pendingPaymentId);
+      console.log('✅ [SUBSCRIPTIONS] Pending payment saved:', pendingPaymentId);
+      console.log('🔗 [SUBSCRIPTIONS] Payment URL:', paymentUrl);
 
-      // ALWAYS CREATE SUBSCRIPTION IMMEDIATELY (NowPayments removed)
-      console.log('🧪 [SUBSCRIPTIONS] TEST MODE - Creating subscription immediately without payment confirmation');
-      
-      // Create subscription directly (same as confirmPayment would do)
-      const duration = 30; // 30 days
-      const amountPaid = strategyPrice;
-      const subscription = await this.createSubscription({
-        userId,
-        strategyId,
-        duration,
-        amountPaid,
-        coachCommissionPercentage,
-        paymentMethod: 'automatic',
-        notes: 'Test mode - auto-created',
-      });
-
-      console.log('✅ [SUBSCRIPTIONS] Test subscription created:', subscription.id);
-
-      // Mark pending payment as completed
-      await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
-        status: 'completed',
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      // Return payment data with subscription ID
+      // Return payment URL for user to complete payment
       return {
-        ...paymentData,
-        subscriptionId: subscription.id,
-        autoCreated: true,
+        success: true,
+        paymentUrl,
+        transactionId,
+        amount: strategyPrice,
+        currency: currencyType,
+        message: 'Please complete payment to activate subscription',
       };
     } catch (error) {
       console.error('❌ [SUBSCRIPTIONS] Error initiating subscription:', error);

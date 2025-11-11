@@ -5,6 +5,7 @@ import { FirebaseConfig } from '../database/firebase/firebase.config';
 import { AuthModule } from '../auth/auth.module';
 import { WalletsModule } from '../wallets/wallets.module';
 import { PaymentsModule } from '../payments/payments.module';
+import { ThreePayService } from '../services/threepay.service';
 
 @Module({
   imports: [
@@ -13,7 +14,7 @@ import { PaymentsModule } from '../payments/payments.module';
     forwardRef(() => PaymentsModule),
   ],
   controllers: [SubscriptionsController],
-  providers: [SubscriptionsService, FirebaseConfig],
+  providers: [SubscriptionsService, FirebaseConfig, ThreePayService],
   exports: [SubscriptionsService],
 })
 export class SubscriptionsModule {}

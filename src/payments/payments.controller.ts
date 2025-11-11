@@ -74,5 +74,26 @@ export class PaymentsController {
   async handleWebhook(@Body() body: any, @Headers('x-nowpayments-sig') signature: string) {
     return this.paymentsService.handleNowPaymentsWebhook(body, signature);
   }
+
+  /**
+   * 3pa-y webhook endpoint
+   * This receives payment confirmations from 3pa-y
+   * CRITICAL: Always verify the transaction with 3pa-y before processing
+   */
+  @Public()
+  @Post('webhook/3pay')
+  async handleThreePayWebhook(@Body() body: any) {
+    return this.paymentsService.handleThreePayCallback(body);
+  }
+
+  /**
+   * Manual transaction verification endpoint
+   * Useful for debugging or manual checks
+   */
+  @Get('verify/3pay')
+  @UseGuards(AuthGuard)
+  async verifyThreePayTransaction(@Query('transactionId') transactionId: string) {
+    return this.paymentsService.verifyAndProcessPayment(transactionId);
+  }
 }
 

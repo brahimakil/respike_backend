@@ -4,9 +4,11 @@ import {
   BadRequestException,
   Inject,
   forwardRef,
+  Logger,
 } from '@nestjs/common';
 import { FirebaseConfig } from '../database/firebase/firebase.config';
 import { WalletsService } from '../wallets/wallets.service';
+import { ThreePayService } from '../services/threepay.service';
 import * as admin from 'firebase-admin';
 import axios from 'axios';
 import {
@@ -20,6 +22,7 @@ import {
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
   private readonly NOWPAYMENTS_API_URL = 'https://api.nowpayments.io/v1';
   private readonly NOWPAYMENTS_SANDBOX_URL = 'https://api-sandbox.nowpayments.io/v1';
 
@@ -27,6 +30,7 @@ export class PaymentsService {
     @Inject(FirebaseConfig)
     private readonly firebaseConfig: FirebaseConfig,
     private readonly walletsService: WalletsService,
+    private readonly threePayService: ThreePayService,
   ) {}
 
   private get firestore(): admin.firestore.Firestore {
@@ -752,5 +756,307 @@ export class PaymentsService {
       throw error;
     }
   }
-}
 
+  /**
+   * Handle 3pa-y webhook callback
+   * CRITICAL: Always verify with 3pa-y API before processing
+   */
+  async handleThreePayCallback(body: any) {
+    try {
+      this.logger.log('🔔 [3PAY WEBHOOK] Processing callback...');
+      this.logger.log('📦 [3PAY WEBHOOK] Payload:', JSON.stringify(body));
+
+      // Extract transaction ID from callback
+      const transactionId = body.transactionId || body.transaction_id || body.id;
+      
+      if (!transactionId) {
+        this.logger.error('❌ [3PAY WEBHOOK] No transaction ID in callback');
+        throw new BadRequestException('Missing transaction ID');
+      }
+
+      // SECURITY: Verify the transaction with 3pa-y API
+      this.logger.log(`🔒 [3PAY WEBHOOK] Verifying transaction: ${transactionId}`);
+      const verification = await this.threePayService.verifyCallback(transactionId);
+
+      if (!verification.isValid) {
+        this.logger.error('❌ [3PAY WEBHOOK] Invalid callback - verification failed');
+        throw new BadRequestException('Invalid callback');
+      }
+
+      if (!verification.isPaid) {
+        this.logger.warn('⚠️ [3PAY WEBHOOK] Transaction not paid yet');
+        return { success: true, message: 'Transaction not completed yet' };
+      }
+
+      // Process the payment
+      this.logger.log('💳 [3PAY WEBHOOK] Payment verified - processing...');
+      await this.processVerifiedPayment(transactionId, verification.transaction);
+
+      return { success: true, message: 'Payment processed successfully' };
+    } catch (error) {
+      this.logger.error('❌ [3PAY WEBHOOK] Error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Manually verify and process a 3pa-y payment
+   * Used for debugging or manual verification
+   */
+  async verifyAndProcessPayment(transactionId: string) {
+    try {
+      this.logger.log(`🔍 [3PAY] Manual verification: ${transactionId}`);
+
+      // Verify with 3pa-y
+      const verification = await this.threePayService.verifyCallback(transactionId);
+
+      if (!verification.isValid) {
+        throw new BadRequestException('Invalid transaction');
+      }
+
+      if (!verification.isPaid) {
+        return { 
+          success: false, 
+          message: 'Transaction not completed',
+          status: verification.transaction?.status 
+        };
+      }
+
+      // Process payment
+      await this.processVerifiedPayment(transactionId, verification.transaction);
+
+      return { 
+        success: true, 
+        message: 'Payment verified and processed',
+        transaction: verification.transaction 
+      };
+    } catch (error) {
+      this.logger.error('❌ [3PAY] Verification error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Process a verified 3pa-y payment
+   * This activates subscriptions and processes wallet transactions
+   */
+  private async processVerifiedPayment(transactionId: string, transactionData: any) {
+    try {
+      this.logger.log(`💎 [3PAY] Processing verified payment: ${transactionId}`);
+
+      // Find pending payment in Firestore
+      const pendingPaymentQuery = await this.firestore
+        .collection('pending_payments')
+        .where('threePayTransactionId', '==', transactionId)
+        .limit(1)
+        .get();
+
+      if (pendingPaymentQuery.empty) {
+        this.logger.error(`❌ [3PAY] No pending payment found for transaction: ${transactionId}`);
+        throw new NotFoundException('Pending payment not found');
+      }
+
+      const pendingPaymentDoc = pendingPaymentQuery.docs[0];
+      const pendingPaymentData = pendingPaymentDoc.data();
+      const pendingPaymentId = pendingPaymentDoc.id;
+
+      this.logger.log(`✅ [3PAY] Found pending payment: ${pendingPaymentId}`);
+      this.logger.log(`👤 [3PAY] User ID: ${pendingPaymentData.userId}`);
+      this.logger.log(`📦 [3PAY] Type: ${pendingPaymentData.type}`);
+
+      // Check if already processed
+      if (pendingPaymentData.status === 'completed') {
+        this.logger.warn('⚠️ [3PAY] Payment already processed');
+        return;
+      }
+
+      const paymentType = pendingPaymentData.type; // 'subscription', 'renewal', 'upgrade', 'downgrade'
+
+      // Process based on payment type
+      if (paymentType === 'subscription') {
+        await this.processSubscriptionPayment(pendingPaymentId, pendingPaymentData);
+      } else if (paymentType === 'renewal') {
+        await this.processRenewalPayment(pendingPaymentId, pendingPaymentData);
+      } else if (paymentType === 'upgrade' || paymentType === 'downgrade') {
+        await this.processUpgradePayment(pendingPaymentId, pendingPaymentData);
+      }
+
+      // Mark pending payment as completed
+      await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
+        status: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        threePayStatus: transactionData.status,
+      });
+
+      this.logger.log(`✅ [3PAY] Payment processed successfully: ${pendingPaymentId}`);
+    } catch (error) {
+      this.logger.error('❌ [3PAY] Error processing payment:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Process new subscription payment
+   */
+  private async processSubscriptionPayment(pendingPaymentId: string, pendingPaymentData: any) {
+    this.logger.log('📋 [3PAY] Processing NEW subscription payment...');
+
+    const { userId, strategyId, amount, coachCommissionPercentage } = pendingPaymentData;
+
+    // Create ACTIVE subscription
+    const strategyDoc = await this.firestore.collection('strategies').doc(strategyId).get();
+    const strategyData = strategyDoc.data();
+
+    const userDoc = await this.firestore.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + 30);
+
+    const subscriptionRef = await this.firestore.collection('subscriptions').add({
+      userId,
+      userName: userData?.name || 'Unknown',
+      userEmail: userData?.email || '',
+      strategyId,
+      strategyName: strategyData?.name || 'Unknown',
+      strategyNumber: strategyData?.strategyNumber || 0,
+      strategyPrice: strategyData?.price || 0,
+      status: 'ACTIVE', // Make it ACTIVE
+      startDate: admin.firestore.Timestamp.fromDate(startDate),
+      endDate: admin.firestore.Timestamp.fromDate(endDate),
+      completedVideos: [],
+      coachCommissionPercentage: coachCommissionPercentage || 30,
+      paymentMethod: 'automatic', // 3pa-y payment
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    this.logger.log(`✅ [3PAY] ACTIVE subscription created: ${subscriptionRef.id}`);
+
+    // Process wallet payment with commission
+    await this.walletsService.processSubscriptionPayment(
+      subscriptionRef.id,
+      userId,
+      userData?.name || 'Unknown',
+      strategyData?.name || 'Unknown',
+      amount,
+      userData?.assignedCoachId,
+      userData?.assignedCoachName,
+      coachCommissionPercentage || 30,
+      'automatic', // automatic payment
+    );
+
+    this.logger.log('💰 [3PAY] Wallet payment processed with commission split');
+  }
+
+  /**
+   * Process renewal payment
+   */
+  private async processRenewalPayment(pendingPaymentId: string, pendingPaymentData: any) {
+    this.logger.log('🔄 [3PAY] Processing RENEWAL payment...');
+
+    const { userId, amount, coachCommissionPercentage } = pendingPaymentData;
+
+    // Find pending subscription
+    const pendingSubQuery = await this.firestore
+      .collection('subscriptions')
+      .where('userId', '==', userId)
+      .where('status', '==', 'PENDING')
+      .limit(1)
+      .get();
+
+    if (pendingSubQuery.empty) {
+      throw new NotFoundException('No pending subscription found');
+    }
+
+    const pendingSubDoc = pendingSubQuery.docs[0];
+    const pendingSubData = pendingSubDoc.data();
+    const pendingSubId = pendingSubDoc.id;
+
+    // Make subscription ACTIVE with new 30-day period
+    const newEndDate = new Date();
+    newEndDate.setDate(newEndDate.getDate() + 30);
+
+    await this.firestore.collection('subscriptions').doc(pendingSubId).update({
+      status: 'ACTIVE',
+      endDate: admin.firestore.Timestamp.fromDate(newEndDate),
+      paymentMethod: 'automatic',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    this.logger.log(`✅ [3PAY] Subscription renewed to ACTIVE: ${pendingSubId}`);
+
+    // Process wallet payment
+    const userDoc = await this.firestore.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+
+    await this.walletsService.processSubscriptionPayment(
+      pendingSubId,
+      userId,
+      userData?.name || 'Unknown',
+      pendingSubData.strategyName,
+      amount,
+      userData?.assignedCoachId,
+      userData?.assignedCoachName,
+      coachCommissionPercentage || 30,
+      'automatic',
+    );
+
+    this.logger.log('💰 [3PAY] Renewal payment processed');
+  }
+
+  /**
+   * Process upgrade/downgrade payment
+   */
+  private async processUpgradePayment(pendingPaymentId: string, pendingPaymentData: any) {
+    this.logger.log('🔼 [3PAY] Processing UPGRADE/DOWNGRADE payment...');
+
+    const { userId, strategyId, currentSubscriptionId, amount, coachCommissionPercentage } = pendingPaymentData;
+
+    // Get new strategy data
+    const newStrategyDoc = await this.firestore.collection('strategies').doc(strategyId).get();
+    const newStrategyData = newStrategyDoc.data();
+
+    // Update subscription: new strategy + ACTIVE + new 30-day period
+    const newStartDate = new Date();
+    const newEndDate = new Date();
+    newEndDate.setDate(newEndDate.getDate() + 30);
+
+    await this.firestore.collection('subscriptions').doc(currentSubscriptionId).update({
+      strategyId,
+      strategyName: newStrategyData?.name,
+      strategyNumber: newStrategyData?.strategyNumber || 0,
+      strategyPrice: newStrategyData?.price || 0,
+      status: 'ACTIVE', // Make it ACTIVE
+      startDate: admin.firestore.Timestamp.fromDate(newStartDate),
+      endDate: admin.firestore.Timestamp.fromDate(newEndDate),
+      completedVideos: [], // Reset progress
+      coachCommissionPercentage,
+      paymentMethod: 'automatic',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    this.logger.log(`✅ [3PAY] Subscription upgraded to ACTIVE: ${currentSubscriptionId}`);
+
+    // Process wallet payment if amount > 0
+    if (amount > 0) {
+      const userDoc = await this.firestore.collection('users').doc(userId).get();
+      const userData = userDoc.data();
+
+      await this.walletsService.processSubscriptionPayment(
+        currentSubscriptionId,
+        userId,
+        userData?.name || 'Unknown',
+        newStrategyData?.name || 'Unknown',
+        amount,
+        userData?.assignedCoachId,
+        userData?.assignedCoachName,
+        coachCommissionPercentage || 30,
+        'automatic',
+      );
+
+      this.logger.log('💰 [3PAY] Upgrade payment processed');
+    }
+  }
+}

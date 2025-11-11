@@ -38,5 +38,10 @@ export default () => ({
     cdnHostname: process.env.BUNNY_CDN_HOSTNAME,
     pullZone: process.env.BUNNY_PULL_ZONE,
   },
+  
+  threepay: {
+    apiKey: process.env.THREEPAY_API_KEY,
+    apiSecret: process.env.THREEPAY_API_SECRET,
+    useSandbox: process.env.THREEPAY_USE_SANDBOX === 'true',
+  },
 });
-
