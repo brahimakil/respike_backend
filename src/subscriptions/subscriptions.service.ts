@@ -688,21 +688,17 @@ export class SubscriptionsService {
         currencyType = 'USDT-ERC20';
       }
 
-      // Get callback URL - use placeholder for localhost
-      const backendUrl = process.env.BACKEND_URL || 'http://localhost:3000';
-      let callbackUrl: string;
+      // Create transaction with callback URL
+      // For production (Vercel), use the real frontend URL
+      // For localhost, 3pa-y won't accept it, so we use placeholder and rely on localStorage
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const isLocalhost = frontendUrl.includes('localhost') || frontendUrl.includes('127.0.0.1');
       
-      if (backendUrl.includes('localhost') || backendUrl.includes('127.0.0.1')) {
-        // For local development, use a publicly accessible placeholder URL
-        // 3pa-y requires valid URLs, so we use their example URL
-        callbackUrl = 'https://3pa-y.com/webhook';
-        console.log('⚠️ [SUBSCRIPTIONS] Local development detected - using placeholder webhook URL');
-        console.log('⚠️ [SUBSCRIPTIONS] You will need to manually verify payments or use ngrok for real webhooks');
-      } else {
-        callbackUrl = `${backendUrl}/payments/webhook/3pay`;
-      }
+      const callbackUrl = isLocalhost 
+        ? 'https://3pa-y.com/callback'  // Placeholder for localhost (3pa-y rejects localhost URLs)
+        : `${frontendUrl}/dashboard/track`;  // Real URL for production
       
-      console.log('🔔 [SUBSCRIPTIONS] Callback URL:', callbackUrl);
+      console.log(`🔔 [SUBSCRIPTIONS] Callback URL: ${callbackUrl} ${isLocalhost ? '(placeholder - localhost)' : '(production)'}`);
       
       const threePayTransaction = await this.threePayService.createTransaction({
         amount: strategyPrice,
@@ -719,6 +715,10 @@ export class SubscriptionsService {
         console.error('❌ [SUBSCRIPTIONS] Invalid 3pa-y response:', threePayTransaction);
         throw new BadRequestException('Failed to create payment transaction');
       }
+      
+      console.log('🔔 [SUBSCRIPTIONS] Callback URL (user redirect after payment):', callbackUrl);
+      console.log('� [SUBSCRIPTIONS] Payment URL:', paymentUrl);
+      console.log('🆔 [SUBSCRIPTIONS] Transaction ID:', transactionId);
 
       // Store pending payment info with 3pa-y transaction ID
       const pendingPaymentId = `pending_3pay_${transactionId}`;
