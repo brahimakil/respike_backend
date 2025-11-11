@@ -903,6 +903,49 @@ export class PaymentsService {
 
     const { userId, strategyId, amount, coachCommissionPercentage } = pendingPaymentData;
 
+    // CHECK: Don't create duplicate if user already has active subscription
+    const existingActiveQuery = await this.firestore
+      .collection('subscriptions')
+      .where('userId', '==', userId)
+      .where('status', '==', 'ACTIVE')
+      .limit(1)
+      .get();
+
+    if (!existingActiveQuery.empty) {
+      this.logger.warn(`⚠️ [3PAY] User already has ACTIVE subscription, skipping creation`);
+      // Still process wallet payment if not already done
+      const existingSubId = existingActiveQuery.docs[0].id;
+      const existingSubData = existingActiveQuery.docs[0].data();
+      
+      // Check if wallet payment already processed for this pending payment
+      const systemWallet = await this.walletsService.getSystemWallet();
+      const walletTransactions = await this.firestore
+        .collection('wallet_transactions')
+        .where('walletId', '==', systemWallet.id)
+        .where('referenceId', '==', existingSubId)
+        .limit(1)
+        .get();
+        
+      if (walletTransactions.empty) {
+        this.logger.log('💰 [3PAY] Processing wallet payment for existing subscription...');
+        const userDoc = await this.firestore.collection('users').doc(userId).get();
+        const userData = userDoc.data();
+        
+        await this.walletsService.processSubscriptionPayment(
+          existingSubId,
+          userId,
+          userData?.displayName || userData?.name || 'Unknown',
+          existingSubData.strategyName,
+          amount,
+          userData?.assignedCoachId,
+          userData?.assignedCoachName,
+          coachCommissionPercentage || 30,
+          'automatic',
+        );
+      }
+      return; // Exit early
+    }
+
     // Create ACTIVE subscription
     const strategyDoc = await this.firestore.collection('strategies').doc(strategyId).get();
     const strategyData = strategyDoc.data();
