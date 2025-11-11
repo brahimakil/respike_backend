@@ -1282,138 +1282,68 @@ export class SubscriptionsService {
     currency: string,
     coachCommissionPercentage: number,
   ): Promise<any> {
-    console.log('💳 [RENEWAL] ========================================');
-    console.log('💳 [RENEWAL] Creating payment for renewal');
-    console.log('💳 [RENEWAL] amount:', amount);
-    console.log('💳 [RENEWAL] coachCommissionPercentage:', coachCommissionPercentage);
+    console.log('💳 [RENEWAL] Creating 3pa-y payment for renewal');
+    console.log('💳 [RENEWAL] Amount:', amount);
+    console.log('💳 [RENEWAL] Coach commission percentage:', coachCommissionPercentage);
     
+    // Get strategy data for description
+    const strategyDoc = await this.firestore.collection('strategies').doc(strategyId).get();
+    const strategyData = strategyDoc.data();
+
+    // Determine callbackUrl based on environment
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const isLocalhost = frontendUrl.includes('localhost') || frontendUrl.includes('127.0.0.1');
+    
+    const callbackUrl = isLocalhost 
+      ? 'https://3pa-y.com/callback'  // Placeholder for localhost
+      : `${frontendUrl}/dashboard/track`;  // Real URL for production
+    
+    console.log(`🔔 [RENEWAL] Callback URL: ${callbackUrl} ${isLocalhost ? '(placeholder - localhost)' : '(production)'}`);
+
+    // Create 3pa-y transaction for renewal
+    const threepayTransaction = await this.threePayService.createTransaction({
+      amount,
+      currencyType: 'USDT-TRC20',
+      callbackUrl,
+    });
+
+    console.log('✅ [RENEWAL] 3pa-y transaction created:', threepayTransaction);
+
+    const transactionId = threepayTransaction.transactionId || threepayTransaction.transaction_id || threepayTransaction.id;
+    const paymentUrl = threepayTransaction.paymentUrl || threepayTransaction.payment_url || threepayTransaction.url;
+
     const coachCommission = (amount * coachCommissionPercentage) / 100;
     const systemShare = amount - coachCommission;
 
-    console.log('💳 [RENEWAL] Commission split:', { coachCommission, systemShare });
+    console.log('� [RENEWAL] Commission split:', { coachCommission, systemShare });
 
-    // ALWAYS TEST MODE - NowPayments removed
-    console.log('🧪 [RENEWAL] Running in TEST MODE - NowPayments disabled');
-    
-    const paymentData = {
-      paymentId: `test_renewal_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-      paymentAddress: walletAddress,
-      amount,
-      strategyPrice: amount,
-      coachCommissionPercentage,
-      coachCommission,
-      systemShare,
-      currency,
-      testMode: true,
-      type: 'renewal',
-    };
-    
-    const pendingPaymentId = `pending_${paymentData.paymentId}`;
-    console.log('💳 [RENEWAL] Generated payment ID:', paymentData.paymentId);
-    console.log('💳 [RENEWAL] Pending payment ID:', pendingPaymentId);
+    const pendingPaymentId = `pending_3pay_${transactionId}`;
 
-    console.log('💾 [RENEWAL] Saving pending payment to Firestore...');
+    // Save pending payment with renewal metadata
     await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
       userId,
       strategyId,
-      userWalletAddress: walletAddress,
-      paymentId: paymentData.paymentId,
-      currency,
+      transactionId,
+      paymentUrl,
+      currency: 'USD',
       amount,
       strategyPrice: amount,
       coachCommissionPercentage,
       coachCommission,
       systemShare,
       status: 'waiting',
-      testMode: true,
+      paymentMethod: '3pay',
       type: 'renewal',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    console.log('✅ [RENEWAL] Pending payment saved');
 
-    // ALWAYS CREATE RENEWAL IMMEDIATELY (NowPayments removed)
-    console.log('🧪 [RENEWAL] TEST MODE - Processing renewal immediately');
-    
-    // Find the pending subscription
-    console.log('🔍 [RENEWAL] Looking for pending subscription...');
-    const pendingSnapshot = await this.firestore
-      .collection('subscriptions')
-      .where('userId', '==', userId)
-      .where('status', '==', SubscriptionStatus.PENDING)
-      .limit(1)
-      .get();
+    console.log('🔗 [RENEWAL] Payment URL:', paymentUrl);
 
-    console.log('🔍 [RENEWAL] Found pending subscription?', !pendingSnapshot.empty);
-
-    if (!pendingSnapshot.empty) {
-      const pendingSubDoc = pendingSnapshot.docs[0];
-      const pendingSubId = pendingSubDoc.id;
-      const pendingSubData = pendingSubDoc.data();
-      
-      console.log('✅ [RENEWAL] Pending subscription:', {
-        id: pendingSubId,
-        strategyName: pendingSubData.strategyName,
-        currentStatus: pendingSubData.status,
-      });
-
-      // Renew the subscription (30 more days from now)
-      const newEndDate = new Date();
-      newEndDate.setDate(newEndDate.getDate() + 30);
-      
-      console.log('🔄 [RENEWAL] Updating subscription status to ACTIVE...');
-      console.log('🔄 [RENEWAL] New end date:', newEndDate);
-
-      await this.firestore.collection('subscriptions').doc(pendingSubId).update({
-        status: SubscriptionStatus.ACTIVE,
-        endDate: admin.firestore.Timestamp.fromDate(newEndDate),
-        paymentMethod: 'automatic',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      console.log('✅ [RENEWAL] Pending subscription renewed to ACTIVE');
-
-      // Process payment with commission split
-      console.log('💰 [RENEWAL] Processing wallet payment...');
-      const userDoc = await this.firestore.collection('users').doc(userId).get();
-      const userData = userDoc.data();
-      const coachId = userData?.assignedCoachId;
-      const coachName = userData?.assignedCoachName;
-      
-      console.log('💰 [RENEWAL] Coach info:', { coachId, coachName });
-
-      await this.walletsService.processSubscriptionPayment(
-        pendingSubId,
-        userId,
-        pendingSubData.userName,
-        pendingSubData.strategyName,
-        amount,
-        coachId,
-        coachName,
-        coachCommissionPercentage,
-        'automatic',
-      );
-
-      console.log('💰 [RENEWAL] Renewal payment processed through wallet');
-
-      // Mark pending payment as completed
-      console.log('💾 [RENEWAL] Marking pending payment as completed...');
-      await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
-        status: 'completed',
-        subscriptionId: pendingSubId,
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      
-      console.log('✅ [RENEWAL] Pending payment marked as completed');
-    } else {
-      console.log('❌ [RENEWAL] No pending subscription found!');
-    }
-
-    console.log('✅ [RENEWAL] Renewal process completed');
-    console.log('💳 [RENEWAL] ========================================');
-    
     return {
-      ...paymentData,
-      autoCreated: true,
+      transactionId,
+      paymentUrl,
+      amount,
+      type: 'renewal',
     };
   }
 
