@@ -1430,118 +1430,66 @@ export class SubscriptionsService {
     currency: string,
     coachCommissionPercentage: number,
   ): Promise<any> {
+    console.log(`🔼 [SUBSCRIPTIONS] Creating 3pa-y payment for UPGRADE (pay difference: $${amount})`);
+
+    // Get new strategy data for description
+    const newStrategyDoc = await this.firestore.collection('strategies').doc(newStrategyId).get();
+    const newStrategyData = newStrategyDoc.data();
+
+    // Determine callbackUrl based on environment
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const isLocalhost = frontendUrl.includes('localhost') || frontendUrl.includes('127.0.0.1');
+    
+    const callbackUrl = isLocalhost 
+      ? 'https://3pa-y.com/callback'  // Placeholder for localhost
+      : `${frontendUrl}/dashboard/track`;  // Real URL for production
+    
+    console.log(`🔔 [SUBSCRIPTIONS] Callback URL: ${callbackUrl} ${isLocalhost ? '(placeholder - localhost)' : '(production)'}`);
+
+    // Create 3pa-y transaction for upgrade
+    const threepayTransaction = await this.threePayService.createTransaction({
+      amount,
+      currencyType: 'USDT-TRC20',
+      callbackUrl,
+    });
+
+    console.log('✅ [SUBSCRIPTIONS] 3pa-y transaction created:', threepayTransaction);
+
+    const transactionId = threepayTransaction.transactionId || threepayTransaction.transaction_id || threepayTransaction.id;
+    const paymentUrl = threepayTransaction.paymentUrl || threepayTransaction.payment_url || threepayTransaction.url;
+
     const coachCommission = (amount * coachCommissionPercentage) / 100;
     const systemShare = amount - coachCommission;
 
-    // ALWAYS TEST MODE - NowPayments removed
-    console.log('🧪 [SUBSCRIPTIONS] Running in TEST MODE - NowPayments disabled');
-    
-    const paymentData = {
-      paymentId: `test_upgrade_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-      paymentAddress: walletAddress,
-      amount,
-      strategyPrice: amount,
-      coachCommissionPercentage,
-      coachCommission,
-      systemShare,
-      currency,
-      testMode: true,
-      type: 'upgrade',
-    };
-    
-    const pendingPaymentId = `pending_${paymentData.paymentId}`;
+    const pendingPaymentId = `pending_3pay_${transactionId}`;
 
+    // Save pending payment with upgrade metadata
     await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
       userId,
       strategyId: newStrategyId,
       oldStrategyId,
       currentSubscriptionId,
-      userWalletAddress: walletAddress,
-      paymentId: paymentData.paymentId,
-      currency,
+      transactionId,
+      paymentUrl,
+      currency: 'USD',
       amount,
       strategyPrice: amount,
       coachCommissionPercentage,
       coachCommission,
       systemShare,
       status: 'waiting',
-      testMode: true,
+      paymentMethod: '3pay',
       type: 'upgrade',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // ALWAYS PROCESS UPGRADE IMMEDIATELY (NowPayments removed)
-    console.log('🧪 [SUBSCRIPTIONS] TEST MODE - Processing upgrade immediately');
-    
-    // Get new strategy data
-    const newStrategyDoc = await this.firestore.collection('strategies').doc(newStrategyId).get();
-    const newStrategyData = newStrategyDoc.data();
-
-    // Set new start and end dates (30 days from now)
-    const newStartDate = new Date();
-    const newEndDate = new Date();
-    newEndDate.setDate(newEndDate.getDate() + 30);
-    
-    console.log('📅 [SUBSCRIPTIONS] New subscription period:', {
-      startDate: newStartDate,
-      endDate: newEndDate,
-    });
-
-    // Update the existing subscription to the new strategy AND make it ACTIVE with new dates
-    await this.firestore.collection('subscriptions').doc(currentSubscriptionId).update({
-      strategyId: newStrategyId,
-      strategyName: newStrategyData?.name,
-      strategyNumber: newStrategyData?.strategyNumber || 0,
-      strategyPrice: newStrategyData?.price || 0,
-      coachCommissionPercentage: coachCommissionPercentage,
-      status: SubscriptionStatus.ACTIVE, // Make it ACTIVE
-      startDate: admin.firestore.Timestamp.fromDate(newStartDate), // New start date
-      endDate: admin.firestore.Timestamp.fromDate(newEndDate), // New end date (30 days)
-      paymentMethod: 'automatic',
-      completedVideos: [], // Reset progress for new strategy
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    
-    console.log('✅ [SUBSCRIPTIONS] Subscription upgraded: ACTIVE status, new 30-day period');
-
-    // Get subscription data for wallet processing
-    const updatedDoc = await this.firestore.collection('subscriptions').doc(currentSubscriptionId).get();
-    const updatedSubData = updatedDoc.data();
-
-    console.log('✅ [SUBSCRIPTIONS] Existing subscription upgraded to new strategy');
-
-    // Process payment with commission split for upgrade
-    const userDoc = await this.firestore.collection('users').doc(userId).get();
-    const userData = userDoc.data();
-    const coachId = userData?.assignedCoachId;
-    const coachName = userData?.assignedCoachName;
-
-    if (amount > 0 && updatedSubData) {
-      await this.walletsService.processSubscriptionPayment(
-        currentSubscriptionId,
-        userId,
-        updatedSubData.userName,
-        newStrategyData?.name || 'Unknown Strategy',
-        amount,
-        coachId,
-        coachName,
-        coachCommissionPercentage,
-        'automatic',
-      );
-
-      console.log('💰 [SUBSCRIPTIONS] Upgrade payment processed through wallet');
-    }
-
-    // Mark pending payment as completed
-    await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
-      status: 'completed',
-      subscriptionId: currentSubscriptionId,
-      completedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    console.log('🔗 [SUBSCRIPTIONS] Payment URL:', paymentUrl);
 
     return {
-      ...paymentData,
-      autoCreated: true,
+      transactionId,
+      paymentUrl,
+      amount,
+      type: 'upgrade',
     };
   }
 
@@ -1558,118 +1506,66 @@ export class SubscriptionsService {
     currency: string,
     coachCommissionPercentage: number,
   ): Promise<any> {
+    console.log(`🔽 [SUBSCRIPTIONS] Creating 3pa-y payment for DOWNGRADE (pay new plan price: $${amount})`);
+
+    // Get new strategy data
+    const newStrategyDoc = await this.firestore.collection('strategies').doc(newStrategyId).get();
+    const newStrategyData = newStrategyDoc.data();
+
+    // Determine callbackUrl based on environment
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const isLocalhost = frontendUrl.includes('localhost') || frontendUrl.includes('127.0.0.1');
+    
+    const callbackUrl = isLocalhost 
+      ? 'https://3pa-y.com/callback'  // Placeholder for localhost
+      : `${frontendUrl}/dashboard/track`;  // Real URL for production
+    
+    console.log(`🔔 [SUBSCRIPTIONS] Callback URL: ${callbackUrl} ${isLocalhost ? '(placeholder - localhost)' : '(production)'}`);
+
+    // Create 3pa-y transaction for downgrade
+    const threepayTransaction = await this.threePayService.createTransaction({
+      amount,
+      currencyType: 'USDT-TRC20',
+      callbackUrl,
+    });
+
+    console.log('✅ [SUBSCRIPTIONS] 3pa-y transaction created:', threepayTransaction);
+
+    const transactionId = threepayTransaction.transactionId || threepayTransaction.transaction_id || threepayTransaction.id;
+    const paymentUrl = threepayTransaction.paymentUrl || threepayTransaction.payment_url || threepayTransaction.url;
+
     const coachCommission = (amount * coachCommissionPercentage) / 100;
     const systemShare = amount - coachCommission;
 
-    // ALWAYS TEST MODE - NowPayments removed
-    console.log('🧪 [SUBSCRIPTIONS] Running in TEST MODE - NowPayments disabled');
-    
-    const paymentData = {
-      paymentId: `test_downgrade_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-      paymentAddress: walletAddress,
-      amount,
-      strategyPrice: amount,
-      coachCommissionPercentage,
-      coachCommission,
-      systemShare,
-      currency,
-      testMode: true,
-      type: 'downgrade',
-    };
-    
-    const pendingPaymentId = `pending_${paymentData.paymentId}`;
+    const pendingPaymentId = `pending_3pay_${transactionId}`;
 
+    // Save pending payment with downgrade metadata
     await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
       userId,
       strategyId: newStrategyId,
       oldStrategyId,
       currentSubscriptionId,
-      userWalletAddress: walletAddress,
-      paymentId: paymentData.paymentId,
-      currency,
+      transactionId,
+      paymentUrl,
+      currency: 'USD',
       amount,
       strategyPrice: amount,
       coachCommissionPercentage,
       coachCommission,
       systemShare,
       status: 'waiting',
-      testMode: true,
+      paymentMethod: '3pay',
       type: 'downgrade',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // ALWAYS PROCESS DOWNGRADE IMMEDIATELY (NowPayments removed)
-    console.log('🧪 [SUBSCRIPTIONS] TEST MODE - Processing downgrade immediately');
-    
-    // Get new strategy data
-    const newStrategyDoc = await this.firestore.collection('strategies').doc(newStrategyId).get();
-    const newStrategyData = newStrategyDoc.data();
-
-    // Set new start and end dates (30 days from now)
-    const newStartDate = new Date();
-    const newEndDate = new Date();
-    newEndDate.setDate(newEndDate.getDate() + 30);
-    
-    console.log('📅 [SUBSCRIPTIONS] New subscription period:', {
-      startDate: newStartDate,
-      endDate: newEndDate,
-    });
-
-    // Update the existing subscription to the new strategy AND make it ACTIVE with new dates
-    await this.firestore.collection('subscriptions').doc(currentSubscriptionId).update({
-      strategyId: newStrategyId,
-      strategyName: newStrategyData?.name,
-      strategyNumber: newStrategyData?.strategyNumber || 0,
-      strategyPrice: newStrategyData?.price || 0,
-      coachCommissionPercentage: coachCommissionPercentage,
-      status: SubscriptionStatus.ACTIVE, // Make it ACTIVE
-      startDate: admin.firestore.Timestamp.fromDate(newStartDate), // New start date
-      endDate: admin.firestore.Timestamp.fromDate(newEndDate), // New end date (30 days)
-      paymentMethod: 'automatic',
-      completedVideos: [], // Reset progress for new strategy
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    
-    console.log('✅ [SUBSCRIPTIONS] Subscription downgraded: ACTIVE status, new 30-day period');
-
-    // Get subscription data for wallet processing
-    const updatedDoc = await this.firestore.collection('subscriptions').doc(currentSubscriptionId).get();
-    const updatedSubData = updatedDoc.data();
-
-    console.log('✅ [SUBSCRIPTIONS] Existing subscription downgraded to new strategy');
-
-    // Process payment with commission split for downgrade
-    const userDoc = await this.firestore.collection('users').doc(userId).get();
-    const userData = userDoc.data();
-    const coachId = userData?.assignedCoachId;
-    const coachName = userData?.assignedCoachName;
-
-    if (amount > 0 && updatedSubData) {
-      await this.walletsService.processSubscriptionPayment(
-        currentSubscriptionId,
-        userId,
-        updatedSubData.userName,
-        newStrategyData?.name || 'Unknown Strategy',
-        amount,
-        coachId,
-        coachName,
-        coachCommissionPercentage,
-        'automatic',
-      );
-
-      console.log('💰 [SUBSCRIPTIONS] Downgrade payment processed through wallet');
-    }
-
-    // Mark pending payment as completed
-    await this.firestore.collection('pending_payments').doc(pendingPaymentId).update({
-      status: 'completed',
-      subscriptionId: currentSubscriptionId,
-      completedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    console.log('🔗 [SUBSCRIPTIONS] Payment URL:', paymentUrl);
 
     return {
-      ...paymentData,
-      autoCreated: true,
+      transactionId,
+      paymentUrl,
+      amount,
+      type: 'downgrade',
     };
   }
 
