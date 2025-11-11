@@ -957,23 +957,43 @@ export class PaymentsService {
     const endDate = new Date();
     endDate.setDate(endDate.getDate() + 30);
 
+    // Get videos for the strategy to populate videoProgress
+    const videosSnapshot = await this.firestore
+      .collection('strategyVideos')
+      .where('strategyId', '==', strategyId)
+      .orderBy('order', 'asc')
+      .get();
+
+    const totalVideos = videosSnapshot.size;
+    const videoProgress = videosSnapshot.docs.map((doc) => ({
+      videoId: doc.id,
+      videoTitle: doc.data().title,
+      videoOrder: doc.data().order,
+      isCompleted: false,
+    }));
+
     const subscriptionRef = await this.firestore.collection('subscriptions').add({
       userId,
       userName: userData?.displayName || userData?.name || 'Unknown',
       userEmail: userData?.email || '',
       strategyId,
       strategyName: strategyData?.name || 'Unknown',
-      strategyNumber: strategyData?.strategyNumber || 0,
+      strategyNumber: strategyData?.number || 0,
       strategyPrice: strategyData?.price || 0,
       status: 'ACTIVE', // Make it ACTIVE
       startDate: admin.firestore.Timestamp.fromDate(startDate),
       endDate: admin.firestore.Timestamp.fromDate(endDate),
-      completedVideos: [],
-      totalVideos: 0,
+      duration: 30,
+      videoProgress,
+      completedVideos: [], // Array of completed video IDs
+      totalVideos,
       progressPercentage: 0,
-      videoProgress: [],
+      currentVideoId: videoProgress[0]?.videoId || null,
+      amountPaid: amount,
       coachCommissionPercentage: coachCommissionPercentage || 30,
       paymentMethod: 'automatic', // 3pa-y payment
+      notes: '',
+      renewalCount: 0,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
