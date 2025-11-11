@@ -916,7 +916,7 @@ export class PaymentsService {
 
     const subscriptionRef = await this.firestore.collection('subscriptions').add({
       userId,
-      userName: userData?.name || 'Unknown',
+      userName: userData?.displayName || userData?.name || 'Unknown',
       userEmail: userData?.email || '',
       strategyId,
       strategyName: strategyData?.name || 'Unknown',
@@ -926,6 +926,9 @@ export class PaymentsService {
       startDate: admin.firestore.Timestamp.fromDate(startDate),
       endDate: admin.firestore.Timestamp.fromDate(endDate),
       completedVideos: [],
+      totalVideos: 0,
+      progressPercentage: 0,
+      videoProgress: [],
       coachCommissionPercentage: coachCommissionPercentage || 30,
       paymentMethod: 'automatic', // 3pa-y payment
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -938,7 +941,7 @@ export class PaymentsService {
     await this.walletsService.processSubscriptionPayment(
       subscriptionRef.id,
       userId,
-      userData?.name || 'Unknown',
+      userData?.displayName || userData?.name || 'Unknown',
       strategyData?.name || 'Unknown',
       amount,
       userData?.assignedCoachId,
@@ -994,7 +997,7 @@ export class PaymentsService {
     await this.walletsService.processSubscriptionPayment(
       pendingSubId,
       userId,
-      userData?.name || 'Unknown',
+      userData?.displayName || userData?.name || 'Unknown',
       pendingSubData.strategyName,
       amount,
       userData?.assignedCoachId,
