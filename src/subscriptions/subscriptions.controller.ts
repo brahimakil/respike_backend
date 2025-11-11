@@ -29,6 +29,8 @@ export class SubscriptionsController {
   // Specific routes MUST come before parameterized routes
   @Get('my-subscription')
   async getMySubscription(@Req() req: any) {
+    console.log('🔵 [CONTROLLER] my-subscription called for user:', req.user?.uid);
+    console.log('🔵 [CONTROLLER] Full user object:', req.user);
     return this.subscriptionsService.getCurrentSubscriptionByUserId(req.user.uid);
   }
 
