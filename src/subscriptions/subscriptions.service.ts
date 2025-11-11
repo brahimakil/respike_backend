@@ -251,6 +251,8 @@ export class SubscriptionsService {
    */
   async getCurrentSubscriptionByUserId(userId: string): Promise<Subscription | null> {
     try {
+      console.log('🔍 [SUBSCRIPTIONS] Fetching subscription for userId:', userId);
+      
       const snapshot = await this.firestore
         .collection('subscriptions')
         .where('userId', '==', userId)
@@ -258,6 +260,16 @@ export class SubscriptionsService {
         .orderBy('createdAt', 'desc')
         .limit(1)
         .get();
+
+      console.log('🔍 [SUBSCRIPTIONS] Query results - empty?', snapshot.empty);
+      if (!snapshot.empty) {
+        console.log('✅ [SUBSCRIPTIONS] Found subscription:', {
+          id: snapshot.docs[0].id,
+          userId: snapshot.docs[0].data().userId,
+          status: snapshot.docs[0].data().status,
+          strategyName: snapshot.docs[0].data().strategyName,
+        });
+      }
 
       if (snapshot.empty) {
         return null;
