@@ -907,7 +907,7 @@ export class PaymentsService {
     const existingActiveQuery = await this.firestore
       .collection('subscriptions')
       .where('userId', '==', userId)
-      .where('status', '==', 'ACTIVE')
+      .where('status', '==', 'active') // Lowercase to match enum
       .limit(1)
       .get();
 
@@ -980,7 +980,7 @@ export class PaymentsService {
       strategyName: strategyData?.name || 'Unknown',
       strategyNumber: strategyData?.number || 0,
       strategyPrice: strategyData?.price || 0,
-      status: 'ACTIVE', // Make it ACTIVE
+      status: 'active', // Lowercase to match enum
       startDate: admin.firestore.Timestamp.fromDate(startDate),
       endDate: admin.firestore.Timestamp.fromDate(endDate),
       duration: 30,
@@ -1028,7 +1028,7 @@ export class PaymentsService {
     const pendingSubQuery = await this.firestore
       .collection('subscriptions')
       .where('userId', '==', userId)
-      .where('status', '==', 'PENDING')
+      .where('status', '==', 'pending') // Lowercase to match enum
       .limit(1)
       .get();
 
@@ -1045,7 +1045,7 @@ export class PaymentsService {
     newEndDate.setDate(newEndDate.getDate() + 30);
 
     await this.firestore.collection('subscriptions').doc(pendingSubId).update({
-      status: 'ACTIVE',
+      status: 'active', // Lowercase to match enum
       endDate: admin.firestore.Timestamp.fromDate(newEndDate),
       paymentMethod: 'automatic',
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1094,7 +1094,7 @@ export class PaymentsService {
       strategyName: newStrategyData?.name,
       strategyNumber: newStrategyData?.strategyNumber || 0,
       strategyPrice: newStrategyData?.price || 0,
-      status: 'ACTIVE', // Make it ACTIVE
+      status: 'active', // Lowercase to match enum
       startDate: admin.firestore.Timestamp.fromDate(newStartDate),
       endDate: admin.firestore.Timestamp.fromDate(newEndDate),
       completedVideos: [], // Reset progress
