@@ -1319,10 +1319,16 @@ export class SubscriptionsService {
 
     const pendingPaymentId = `pending_3pay_${transactionId}`;
 
+    // Get user data for coach info
+    const userDoc = await this.firestore.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    const coachId = userData?.assignedCoachId;
+
     // Save pending payment with renewal metadata
     await this.firestore.collection('pending_payments').doc(pendingPaymentId).set({
       userId,
       strategyId,
+      userWalletAddress: walletAddress,
       threePayTransactionId: transactionId,
       paymentUrl,
       currency: 'USD',
@@ -1331,9 +1337,10 @@ export class SubscriptionsService {
       coachCommissionPercentage,
       coachCommission,
       systemShare,
+      coachId: coachId || null,
       status: 'waiting',
-      paymentMethod: '3pay',
       type: 'renewal',
+      testMode: false,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -1391,6 +1398,11 @@ export class SubscriptionsService {
     const coachCommission = (amount * coachCommissionPercentage) / 100;
     const systemShare = amount - coachCommission;
 
+    // Get user data for coach info
+    const userDoc = await this.firestore.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    const coachId = userData?.assignedCoachId;
+
     const pendingPaymentId = `pending_3pay_${transactionId}`;
 
     // Save pending payment with upgrade metadata
@@ -1399,6 +1411,7 @@ export class SubscriptionsService {
       strategyId: newStrategyId,
       oldStrategyId,
       currentSubscriptionId,
+      userWalletAddress: walletAddress,
       threePayTransactionId: transactionId,
       paymentUrl,
       currency: 'USD',
@@ -1407,9 +1420,10 @@ export class SubscriptionsService {
       coachCommissionPercentage,
       coachCommission,
       systemShare,
+      coachId: coachId || null,
       status: 'waiting',
-      paymentMethod: '3pay',
       type: 'upgrade',
+      testMode: false,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -1467,6 +1481,11 @@ export class SubscriptionsService {
     const coachCommission = (amount * coachCommissionPercentage) / 100;
     const systemShare = amount - coachCommission;
 
+    // Get user data for coach info
+    const userDoc = await this.firestore.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    const coachId = userData?.assignedCoachId;
+
     const pendingPaymentId = `pending_3pay_${transactionId}`;
 
     // Save pending payment with downgrade metadata
@@ -1475,6 +1494,7 @@ export class SubscriptionsService {
       strategyId: newStrategyId,
       oldStrategyId,
       currentSubscriptionId,
+      userWalletAddress: walletAddress,
       threePayTransactionId: transactionId,
       paymentUrl,
       currency: 'USD',
@@ -1483,9 +1503,10 @@ export class SubscriptionsService {
       coachCommissionPercentage,
       coachCommission,
       systemShare,
+      coachId: coachId || null,
       status: 'waiting',
-      paymentMethod: '3pay',
       type: 'downgrade',
+      testMode: false,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
